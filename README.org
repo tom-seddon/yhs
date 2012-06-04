@@ -189,7 +189,7 @@ call =yhs_defer_response= to do this, instead of calling
 =yhs_data_response= or =yhs_image_response=.
 
 You'll need to store an object of type =yhsDeferredResponse= to hold
-some state. =yhsDeferredResponse= objects should always be
+some state. =yhsDeferredResponse= objects should always start out
 default-initialised:
 
 : yhsDeferredResponse dre={};
@@ -216,11 +216,11 @@ the necessary cleanup:
 
 *** Noting need for delayed response
 
-What you're "supposed" to do is maintain a =yhsDeferredResponse= for
-each bit of code that might be sending a deferred response. (These
-objects are designed to be "fairly small" -- currently 2 pointers.)
-Then test its =server= member to see if a response has been deferred;
-if it's non-=NULL=, send the data.
+What you're assumed to be doing is maintaining a =yhsDeferredResponse=
+for each bit of code that might be sending a deferred response. (These
+objects are designed to be fairly small -- currently 2 pointers.) Then
+test its =server= member to see if a response has been deferred; if
+it's non-=NULL=, send the data.
 
 =yhs_begin_deferred_response= then resets the =yhsDeferredResponse=
 for you automatically, and =yhs_defer_response= asserts that the
@@ -274,8 +274,8 @@ the data must be copied if it is to be retained.
 * Tweakables
 
 There are some tweakable macros and constants near the top of the .c
-file. There's no API for changing these; just edit them, you know,
-using a "text editor".
+file. There's no API for changing these; just edit them using a text
+editor.
 
 ** Constants
 
@@ -319,12 +319,16 @@ errors go to =stderr=.
 - Optional integration with miniz or stb_image_write to serve
   compressed PNGs
 
-- Optional integration with miniz for gzip'd transfers (e.g., if 
+- Optional integration with miniz for gzip'd transfers
+
+- Add some function or something to reset =yhsDeferredResponse=
+  objects, because it can be a bit inconvenient to default-initialize
+  them if they're part of some larger struct.
 
 * Other embeddable web serving options
 
-If you disagree with the choices made by this "library", perhaps one
-of these other offerings will be more to your taste.
+If you disagree with the choices made here, perhaps one of these other
+offerings will be more to your taste.
 
 ** mongoose
 

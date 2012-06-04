@@ -1,9 +1,10 @@
 #+OPTIONS: toc:nil num:nil author:nil email:nil creator:nil timestamp:nil ^:nil
 #+TITLE: yocto HTTP server
 
-The yocto HTTP server is a small embeddable web server. Use it to add
-a web server to your program for debugging, introspection or remote
-control.
+The yocto HTTP server is a small embeddable web server, with a
+convenient public domain licence. Use it to add a web server to your
+program for debugging, introspection or remote control. The yocto HTTP
+server is not for production use!
 
 You specify the paths of "files" and "folders" you want to make
 available, and callbacks to be called when they are requested, and the
@@ -11,25 +12,13 @@ yocto HTTP server handles the rest. When your callback is called, you
 can use convenient stdio-style functions to send text or binary data
 to the browser, or transmit image data in PNG data.
 
-The yocto HTTP server has many exciting, cutting-edge features:
+The yocto HTTP server doesn't create any threads, doesn't access the
+filing system, doesn't allocate memory all the time, and comes as only
+2 source files, for ease of integration.
 
-- Doesn't create any threads
-
-- Doesn't do any filing system access
-
-- Doesn't allocate memory all the time
-
-- Comes as only 2 files, that you add to your project as if you wrote
-  them yourself
-
-- Convenient public domain non-licence
-
-- Compiles as C89 or C++
-
-- Supports Win32, iOS, Mac OS X
-
-The yocto HTTP server is not for production use, and is designed for
-ease of use rather than completeness.
+iOS and Mac OS X are supported. It should also build on Windows, and
+you should be able to compile it as C89 or C++ (so it will work with
+VC++).
 
 * Installation
 
@@ -39,7 +28,7 @@ ease of use rather than completeness.
 
 3. Add function calls as described below;
 
-4. Add =#ifdef= (etc.) to make very sure you don't ship with it
+4. Add =#ifdef= (etc.) to make very sure you won't ship with it
    running;
 
 5. PROFIT.
@@ -324,6 +313,8 @@ errors go to =stderr=.
 - Add some function or something to reset =yhsDeferredResponse=
   objects, because it can be a bit inconvenient to default-initialize
   them if they're part of some larger struct.
+
+- Some kind of demo...
 
 * Other embeddable web serving options
 

@@ -1,6 +1,24 @@
-#ifndef YHS_H_
-#define YHS_H_
+#ifndef YHS_H_D6057315455C40F9B45D68049C1EB35E
+#define YHS_H_D6057315455C40F9B45D68049C1EB35E
 
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+//
+// yhs - yocto HTTP server
+// -----------------------
+//
+// `yocto' is (at the time of writing) the smallest SI prefix. It is
+// very small.
+//
+// `yocto' refers to the server's feature set, not the size of the code.
+// Though there's not THAT much to trawl through.
+//
+// THIS IS NOT FOR PRODUCTION USE. It's designed for use during development.
+//
+// yhs was written by Tom Seddon <yhs@tomseddon.plus.com>.
+//
+// yhs is in the public domain.
+//
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
@@ -493,4 +511,4 @@ YHS_EXTERN void yhs_add_res_path_handler(yhsServer *server,const char *res_path,
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-#endif
+#endif//YHS_H_D6057315455C40F9B45D68049C1EB35E

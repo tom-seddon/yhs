@@ -1,0 +1,339 @@
+#+OPTIONS: toc:nil num:nil author:nil email:nil creator:nil timestamp:nil ^:nil
+#+TITLE: yocto HTTP server
+
+The yocto HTTP server is a small embeddable web server. Use it to add
+a web server to your program for debugging, introspection or remote
+control.
+
+You specify the paths of "files" and "folders" you want to make
+available, and callbacks to be called when they are requested, and the
+yocto HTTP server handles the rest. When your callback is called, you
+can use convenient stdio-style functions to send text or binary data
+to the browser, or transmit image data in PNG data.
+
+The yocto HTTP server has many exciting, cutting-edge features:
+
+- Doesn't create any threads
+
+- Doesn't do any filing system access
+
+- Doesn't allocate memory all the time
+
+- Comes as only 2 files, that you add to your project as if you wrote
+  them yourself
+
+- Convenient public domain non-licence
+
+- Compiles as C89 or C++
+
+- Supports Win32, iOS, Mac OS X
+
+The yocto HTTP server is not for production use, and is designed for
+ease of use rather than completeness.
+
+* Installation
+
+1. Add =yhs.c= and =yhs.h= to your project;
+
+2. Include =yhs.h= in files that need it;
+
+3. Add function calls as described below;
+
+4. Add =#ifdef= (etc.) to make very sure you don't ship with it
+   running;
+
+5. PROFIT.
+
+* Use
+
+More detailed reference docs are in the header file directly; here's a
+more conversational overview.
+
+** Start, update and stop server
+
+A particular server (serving a particular tree of "files" on a
+particular port) is represented by a =yhsServer= pointer:
+
+: yhsServer *server;
+
+Create one using =yhs_new_server=, supplying port:
+
+: server = yhs_new_server(80);
+
+You can name your server, if you like. Its name will appear in any
+error pages.
+
+: yhs_set_server_name(server,"my amazing server");
+
+Each time round your main loop, call =yhs_update= to keep the server
+ticking over:
+
+: yhs_update(server);
+
+When you're done, call =yhs_delete_server= to free up the server and
+its resources:
+
+: yhs_delete_server(server);
+: server=NULL;
+
+** Adding things to serve
+
+Use =yhs_add_res_path_handler= to add a callback (see below) for a
+particular path:
+
+: yhs_add_res_path_handler(server,"/res/",&handle_root,NULL);
+
+The argument for =context= is passed verbatim to the callback as its
+=context= parameter.
+
+Paths not ending in =/= are considered files, and their callback will
+be called when a request is made for that exact path.
+
+Paths ending in =/= are considered folders, and will be called for any
+file in that folder (at whatever depth), if there isn't a
+closer-matching folder or file handler for it.
+
+If there's no handler added for the root folder =/=, =GET= requests
+for =/= will be responded to automatically with a contents page,
+giving links to all the added paths.
+
+The server will respond to any other unhandled path with a 404 page.
+
+** Serving things
+
+When a request is made for known path, a callback is called allowing
+you to send data back to the browser. The callback has the following
+signature:
+
+: extern "C" typedef void (*yhsResPathHandlerFn)(yhsResponse *re,void *context,yhsResPathHandlerArgs *args);
+
+=re= points to the (opaque) response object, =context= is the context
+pointer supplied when the callback was added (see below), and =args=
+points to a struct with any other arguments. These other arguments so
+far are =method=, the HTTP method requested (=GET=, =POST=, etc.),
+=res_path=, the path of the requested resource, and =content_type= and
+=content_length=, specifying size and format of any content that came
+along with the request.
+
+When your callback is called, any content is available for reading (if
+you want it), and the server is ready for your callback to provide a
+response, as described below.
+
+Once you have sent the response, just return from the callback and
+appropriate action will be taken automatically.
+
+If your callback doesn't provide any response itself, the server will
+automatically provide a 404 page.
+
+*** Data response
+
+Use =yhs_data_response= to start a data response, supplying MIME type
+of data being sent:
+
+: yhs_data_response(re,"text/html");
+
+Then use =yhs_text= (works like =printf=) to send raw text:
+
+: yhs_text(re,"<html><head><title>Hello</title></head><body><p>%d</p></body></html>",rand());
+
+Also available are =yhs_textv= (works like =vprintf=), and =yhs_text=
+(works like =fputs=).
+
+If you're responding with HTML, there are a set of convenience
+functions, =yhs_html_text*=, which will add in HTML escapes and
+optionally add =<BR>= tags as appropriate.
+
+: yhs_html_text(re,YHS_HEF_BR,random_text);
+
+You can also use =yhs_data= (works like =fwrite=) to send raw data:
+
+: yhs_data(re,buf,buf_size);
+
+These functions perform a bit of buffering, so don't be afraid to
+write single bytes or chars.
+
+*** Image response
+
+Use =yhs_image_response= to start an image response. Supply width,
+height and bytes per pixel of image:
+
+: yhs_image_response(re,256,256,3);
+
+Then for each pixel -- and you must supply every pixel -- call
+=yhs_pixel= to specify red, green, blue and alpha:
+
+: for(int y=0;y<256;++y) {
+:     for(int x=0;x<256;++x)
+:         yhs_pixel(re,rand()&255,rand()&255,rand()&255,255);
+: }
+
+
+Do please note that the PNGs are not compressed...
+
+*** Error response
+
+Call =yhs_error_response= to generate an HTTP error page, providing
+the HTTP status line (e.g., "200 OK"), and the =yhsResPathHandlerArgs=
+if you have them.
+
+*** 303 See Other response
+
+Use =yhs_see_other_response= to direct the browser to =GET= a
+different URL.
+
+** Delaying responses
+
+You may want to put off responding to a request, if it can't be
+conveniently responded to in the middle of the server update. You can
+call =yhs_defer_response= to do this, instead of calling
+=yhs_data_response= or =yhs_image_response=.
+
+You'll need to store an object of type =yhsDeferredResponse= to hold
+some state. =yhsDeferredResponse= objects should always be
+default-initialised:
+
+: yhsDeferredResponse dre={};
+
+Supply a pointer to that when you call =yhs_defer_response=:
+
+: yhs_defer_response(re,&dre);
+
+To actually perform the deferred response, use
+=yhs_begin_deferred_response= to get a usable =yhsResponse=:
+
+: yhsResponse *re=yhs_begin_deferred_response(&dre);
+:
+: yhs_image_response(re,256,256,3);
+: for(int y=0;y<256;++y) {
+:     for(int x=0;x<256;++x)
+:         yhs_pixel(re,rand()&255,rand()&255,rand()&255,255);
+: }
+
+When the response is sent, call =yhs_end_deferred_response= to perform
+the necessary cleanup:
+
+: yhs_end_deferred_response(re);
+
+*** Noting need for delayed response
+
+What you're "supposed" to do is maintain a =yhsDeferredResponse= for
+each bit of code that might be sending a deferred response. (These
+objects are designed to be "fairly small" -- currently 2 pointers.)
+Then test its =server= member to see if a response has been deferred;
+if it's non-=NULL=, send the data.
+
+=yhs_begin_deferred_response= then resets the =yhsDeferredResponse=
+for you automatically, and =yhs_defer_response= asserts that the
+=yhsDeferredResponse= is already reset, under the assumption this will
+be useful to help keep things straight...
+
+** Content
+
+If the request has content associated with it (see the =content_type=
+and =content_length= fields in the arg struct), use =yhs_get_content=
+to retrieve it.
+
+Content must be retrieved immediately; if the response is deferred,
+the form data becomes lost.
+
+** Forms
+
+Helpers are provided for processing data from =POST= method forms in
+=application/x-www-form-urlencoded= format. (=GET= forms, and
+=multipart/form-data=, are not supported.)
+
+Form data must be processed immediately; if the response is deferred,
+the form data becomes lost.
+
+In the handler, use =yhs_read_form_content=:
+
+: int is_form_data_ok=yhs_read_form_content(re);
+: if(!is_form_data_ok)
+:     /* error (probably unlikely) */
+
+This allocates some memory to save off the form data. This memory is
+freed automatically when the handler function finishes.
+
+You can (try to) retrieve a control's value by control name, using
+=yhs_find_control_value=:
+
+: const char *value=yhs_find_control_value(re,"value name");
+
+The result is =NULL= if the value doesn't exist.
+
+You can also iterate through all the names and values available:
+
+: for(size_t i=0;i<yhs_get_num_controls(re);++i) {
+:     const char *name=yhs_get_control_name(re,i);
+:     const char *value=yhs_get_control_value(re,i);
+: }
+
+The pointers point into the data set up by =yhs_read_form_content=;
+the data must be copied if it is to be retained.
+
+* Tweakables
+
+There are some tweakable macros and constants near the top of the .c
+file. There's no API for changing these; just edit them, you know,
+using a "text editor".
+
+** Constants
+
+Probably the most important is =MAX_TEXT_LEN=, which is the size of
+the buffer that =yhs_text= uses for the expansion of the format
+string. But you might want the others too.
+
+** Memory allocation
+
+There are two malloc macros, =MALLOC= and =FREE=, by default wrapping
+=malloc= and =free= respectively.
+
+** Logging
+
+There are 3 logging macros, =YHS_DEBUG_MSG=, =YHS_INFO_MSG= and
+=YHS_ERR_MSG=. By default, debug and info messages go to =stdout=, and
+errors go to =stderr=.
+
+* Notes
+
+- The server uses blocking sockets and makes blocking socket calls, so
+  =yhs_update= could take pretty much any amount of time, if there's
+  something to do. (=yhs_update= will return =1= if it did anything
+  significant, the idea being that the game avoids playing logic
+  catch-up in this case. No timing is actually performed; this is just
+  a quick hack.)
+
+* TODOs
+
+- 303 would probably be a better default response to a POST than 404.
+
+- It's silly that deferring a response eats any associated content;
+  when reading the request header, should simply do it byte by byte,
+  and stop at the end of the header, so that the response is left
+  within the socket recv buffer. (This would also simplify the code a
+  bit.)
+
+- Lack of file I/O is a feature rather than a bug, but a handler that
+  served files from a particular folder tree would still be useful...
+
+- Optional integration with miniz or stb_image_write to serve
+  compressed PNGs
+
+- Optional integration with miniz for gzip'd transfers (e.g., if 
+
+* Other embeddable web serving options
+
+If you disagree with the choices made by this "library", perhaps one
+of these other offerings will be more to your taste.
+
+** mongoose
+
+http://code.google.com/p/mongoose/
+
+** libmicrohttpd
+
+http://www.gnu.org/software/libmicrohttpd/
+
+** tulrich-testbed
+
+http://tu-testbed.svn.sourceforge.net/viewvc/tu-testbed/trunk/tu-testbed/net/

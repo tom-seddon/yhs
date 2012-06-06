@@ -1,0 +1,6 @@
+[dD][eE][bB][uU][gG]
+[rR][eE][lL][eE][aA][sS][eE]
+[dD][eE][bB][uU][gG]\([bB][uU][iI][lL][dD][aA][sS][cC]\+\+\)
+*.ncb
+*.vcproj.*.user
+*.suo

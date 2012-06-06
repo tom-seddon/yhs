@@ -1586,6 +1586,10 @@ int yhs_get_content(yhsResponse *re,int num,char *buf)
 YHS_EXTERN int yhs_read_form_content(yhsResponse *re,const yhsResPathHandlerArgs *args)
 {
     int good=0;
+
+	// Check there's actually some content attached.
+	if(!args->content_type)
+		goto done;
     
     // Sorry, only application/x-www-form-urlencoded for now.
     if(strcmp(args->content_type,"application/x-www-form-urlencoded")!=0)

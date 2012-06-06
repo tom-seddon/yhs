@@ -942,6 +942,7 @@ static void finish_response(yhsResponse *re)
 
 static void header(yhsResponse *re,yhsResponseType type,const char *status,const char *key0,...)
 {
+	const char *key;
 	va_list v;
 	
 	assert(re->type==RT_NONE_SET);
@@ -950,7 +951,7 @@ static void header(yhsResponse *re,yhsResponseType type,const char *status,const
 	yhs_textf(re,"HTTP/1.1 %s\r\n",status);
 	
 	va_start(v,key0);
-	for(const char *key=key0;key;key=va_arg(v,const char *))
+	for(key=key0;key;key=va_arg(v,const char *))
 	{
 		const char *value=va_arg(v,const char *);
 		
@@ -994,6 +995,10 @@ static void debug_dump_string(const char *str,int max_len)
 
 static void toc_handler(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
 {
+	Handler *h;
+
+	(void)args,(void)context;
+
 	yhs_data_response(re,"text/html");
 	
 	yhs_textf(re,"<html>\n");
@@ -1001,7 +1006,7 @@ static void toc_handler(yhsResponse *re,void *context,yhsResPathHandlerArgs *arg
 	yhs_textf(re," <body>\n");
 	yhs_html_textf(re,YHS_HEF_OFF," <h1>\x1by%s\x1bn - Contents</h1>\n",re->server->name);
 	
-	for(Handler *h=re->server->handlers.next;h->handler_fn;h=h->next)
+	for(h=re->server->handlers.next;h->handler_fn;h=h->next)
 		yhs_html_textf(re,YHS_HEF_OFF," <p><a href=\"\x1by%s\x1bn\">\x1by%s\x1bn</a></p>\n",h->res_path,h->res_path);
 	
 	yhs_textf(re," </body>\n");
@@ -1023,7 +1028,7 @@ int yhs_update(yhsServer *server)
         // response gunk
         const char *response_line=NULL;
         yhsResPathHandlerFn handler_fn=NULL;
-        void *context;
+        void *context=NULL;
         yhsResPathHandlerArgs args={0};
         yhsResponse re;
         
@@ -1205,8 +1210,9 @@ void yhs_html_text(yhsResponse *re,unsigned escape_flags,const char *text)
 	int br=!!(escape_flags&YHS_HEF_BR);
 	int on=!(escape_flags&YHS_HEF_OFF);
 	int esc=0;
+	const char *c;
 	
-	for(const char *c=text;*c!=0;++c)
+	for(c=text;*c!=0;++c)
 	{
 		if(esc)
 		{
@@ -1590,7 +1596,7 @@ YHS_EXTERN int yhs_read_form_content(yhsResponse *re,const yhsResPathHandlerArgs
     
     // Get form data and pop a \0x at the end.
 	assert(!re->controls_data_buffer);
-    re->controls_data_buffer=MALLOC(args->content_length+1);
+    re->controls_data_buffer=(char *)MALLOC(args->content_length+1);
     if(!re->controls_data_buffer)
         goto done;
     
@@ -1612,7 +1618,7 @@ YHS_EXTERN int yhs_read_form_content(yhsResponse *re,const yhsResPathHandlerArgs
     }
     
     // Controls...
-    re->controls=MALLOC(re->num_controls*sizeof *re->controls);
+    re->controls=(KeyValuePair *)MALLOC(re->num_controls*sizeof *re->controls);
     
     //
     {
@@ -1745,7 +1751,7 @@ void yhs_add_res_path_handler(yhsServer *server,const char *res_path,yhsResPathH
     
     h->res_path_len=strlen(res_path);
     
-    h->res_path=MALLOC(h->res_path_len+1);
+    h->res_path=(char *)MALLOC(h->res_path_len+1);
     memcpy(h->res_path,res_path,h->res_path_len+1);
     
     h->handler_fn=handler_fn;

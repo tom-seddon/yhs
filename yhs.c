@@ -300,38 +300,38 @@ static void yhs_err(const char *file,int line,int err,const char *msg)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-static void hex_dump(const void *data,size_t data_size)
-{
-    size_t i;
-    
-    for(i=0;i<data_size+16;i+=16)
-    {
-        size_t j;
-        const uint8_t *line=(const uint8_t *)data+i;
-        
-        printf("%08lX:",i);
-        
-        for(j=0;j<16;++j)
-        {
-            if(i+j<data_size)
-                printf(" %02X",line[j]);
-            else
-                printf(" **");
-        }
-        
-        printf("  ");
-        
-        for(j=0;j<16;++j)
-        {
-            if(i+j<data_size)
-                printf("%c",isprint(line[j])?line[j]:'.');
-            else
-                printf(" ");
-        }
-        
-        printf("\n");
-    }
-}
+// static void hex_dump(const void *data,size_t data_size)
+// {
+//     size_t i;
+//     
+//     for(i=0;i<data_size+16;i+=16)
+//     {
+//         size_t j;
+//         const uint8_t *line=(const uint8_t *)data+i;
+//         
+//         printf("%08lX:",i);
+//         
+//         for(j=0;j<16;++j)
+//         {
+//             if(i+j<data_size)
+//                 printf(" %02X",line[j]);
+//             else
+//                 printf(" **");
+//         }
+//         
+//         printf("  ");
+//         
+//         for(j=0;j<16;++j)
+//         {
+//             if(i+j<data_size)
+//                 printf("%c",isprint(line[j])?line[j]:'.');
+//             else
+//                 printf(" ");
+//         }
+//         
+//         printf("\n");
+//     }
+// }
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

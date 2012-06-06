@@ -178,6 +178,8 @@ enum
 struct Handler
 {
     struct Handler *next,*prev;
+
+	unsigned flags;
     
     char *res_path;
     size_t res_path_len;
@@ -1007,7 +1009,10 @@ static void toc_handler(yhsResponse *re,void *context,yhsResPathHandlerArgs *arg
 	yhs_html_textf(re,YHS_HEF_OFF," <h1>\x1by%s\x1bn - Contents</h1>\n",re->server->name);
 	
 	for(h=re->server->handlers.next;h->handler_fn;h=h->next)
-		yhs_html_textf(re,YHS_HEF_OFF," <p><a href=\"\x1by%s\x1bn\">\x1by%s\x1bn</a></p>\n",h->res_path,h->res_path);
+	{
+		if(h->flags&YHS_RPF_TOC)
+			yhs_html_textf(re,YHS_HEF_OFF," <p><a href=\"\x1by%s\x1bn\">\x1by%s\x1bn</a></p>\n",h->res_path,h->res_path);
+	}
 	
 	yhs_textf(re," </body>\n");
 	yhs_textf(re,"</html>\n");
@@ -1744,7 +1749,7 @@ static int path_before(const Handler *a,const Handler *b)
     return strcmp(a->res_path,b->res_path)<0;//though actually they don't need to be in alphabetical order.
 }
 
-void yhs_add_res_path_handler(yhsServer *server,const char *res_path,yhsResPathHandlerFn handler_fn,void *context)
+void yhs_add_res_path_handler(yhsServer *server,unsigned flags,const char *res_path,yhsResPathHandlerFn handler_fn,void *context)
 {
     Handler *h=(Handler *)MALLOC(sizeof *h);
     Handler *prev;
@@ -1752,6 +1757,8 @@ void yhs_add_res_path_handler(yhsServer *server,const char *res_path,yhsResPathH
     assert(res_path);
     
     memset(h,0,sizeof *h);
+
+	h->flags=flags;
     
     h->res_path_len=strlen(res_path);
     

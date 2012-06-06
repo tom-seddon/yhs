@@ -486,6 +486,8 @@ YHS_EXTERN const char *yhs_get_control_value(yhsResponse *response,size_t index)
 //
 // server - the server to add the handler to
 //
+// flags - combination of yhsResPathFlags
+//
 // res_path - path to handle
 //
 // handler_fn - function to handle it
@@ -506,7 +508,15 @@ YHS_EXTERN const char *yhs_get_control_value(yhsResponse *response,size_t index)
 // - The matching isn't recursive, which is a bit crap.
 //
 // - `yhs_add_res_path_handler' allocates memory.
-YHS_EXTERN void yhs_add_res_path_handler(yhsServer *server,const char *res_path,yhsResPathHandlerFn handler_fn,void *context);
+
+enum yhsResPathFlags
+{
+	// If set, this path should appear in the automatically-generated table of
+    // contents.
+	YHS_RPF_TOC=1,
+};
+
+YHS_EXTERN void yhs_add_res_path_handler(yhsServer *server,unsigned flags,const char *res_path,yhsResPathHandlerFn handler_fn,void *context);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

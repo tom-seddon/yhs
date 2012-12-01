@@ -3,8 +3,7 @@
 
 The yocto HTTP server is a small embeddable web server, with a
 convenient public domain licence. Use it to add a web server to your
-program for debugging, introspection or remote control. The yocto HTTP
-server is not for production use!
+program for debugging, introspection or remote control.
 
 You specify the paths of "files" and "folders" you want to make
 available, and callbacks to be called when they are requested, and the
@@ -16,11 +15,14 @@ The yocto HTTP server doesn't create any threads, doesn't access the
 filing system, doesn't allocate memory all the time, and comes as only
 2 source files, for ease of integration.
 
-iOS and Mac OS X are supported. It should also build on Windows, and
-you should be able to compile it as C89 or C++ (so it will work with
-VC++).
+The yocto HTTP server has been written for ease of embedding and ease
+of use, under the assumption that it will be used as a development and
+debugging aid. Security and performance were not design goals.
 
 * Installation
+
+iOS, Mac OS X and Windows (VC++) are supported. It can be built as
+C89, C99 or C++.
 
 1. Add =yhs.c= and =yhs.h= to your project;
 
@@ -223,13 +225,13 @@ and =content_length= fields in the arg struct), use =yhs_get_content=
 to retrieve it.
 
 Content must be retrieved immediately; if the response is deferred,
-the form data becomes lost.
+the content becomes lost.
 
 ** Forms
 
 Helpers are provided for processing data from =POST= method forms in
 =application/x-www-form-urlencoded= format. (=GET= forms, and
-=multipart/form-data=, are not supported.)
+=multipart/form-data=, are not specifically catered for.)
 
 Form data must be processed immediately; if the response is deferred,
 the form data becomes lost.
@@ -237,8 +239,10 @@ the form data becomes lost.
 In the handler, use =yhs_read_form_content=:
 
 : int is_form_data_ok=yhs_read_form_content(re);
-: if(!is_form_data_ok)
+: if(!is_form_data_ok) {
 :     /* error (probably unlikely) */
+:     return;
+: }
 
 This allocates some memory to save off the form data. This memory is
 freed automatically when the handler function finishes.
@@ -257,8 +261,9 @@ You can also iterate through all the names and values available:
 :     const char *value=yhs_get_control_value(re,i);
 : }
 
-The pointers point into the data set up by =yhs_read_form_content=;
-the data must be copied if it is to be retained.
+The pointers point into the data set up by =yhs_read_form_content=,
+which will be freed when the handler returns. The pointed-to data must
+be copied if it is to be kept.
 
 * Tweakables
 
@@ -268,9 +273,22 @@ editor.
 
 ** Constants
 
-Probably the most important is =MAX_TEXT_LEN=, which is the size of
-the buffer that =yhs_text= uses for the expansion of the format
-string. But you might want the others too.
+The main ones:
+
+- =MAX_REQUEST_SIZE= :: max supported size of HTTP header included in
+     request. Server will return a 500 Internal Server Error if the
+     client exceeds this.
+
+- =MAX_TEXT_LEN= :: size of buffer used for format string
+                    expansion. Affects maximum possible length of
+                    output from yhs_textf and yhs_textv.
+
+- =WRITE_BUF_SIZE= :: size of buffer used when writing, to avoid lots
+     of little =send= socket calls.
+
+=MAX_TEXT_LEN= and =WRITE_BUF_SIZE= contribute to the size of the
+=yhsServer= object; =MAX_REQUEST_SIZE= contributes to the amount of
+stack required by the =yhs_update= call.
 
 ** Memory allocation
 
@@ -280,8 +298,11 @@ There are two malloc macros, =MALLOC= and =FREE=, by default wrapping
 ** Logging
 
 There are 3 logging macros, =YHS_DEBUG_MSG=, =YHS_INFO_MSG= and
-=YHS_ERR_MSG=. By default, debug and info messages go to =stdout=, and
-errors go to =stderr=.
+=YHS_ERR_MSG=. These are invoked just like printf, and are assumed to
+expand to a single statement.
+
+By default, debug and info messages go to =stdout=, and errors go to
+=stderr=.
 
 * Notes
 
@@ -294,13 +315,16 @@ errors go to =stderr=.
 
 * TODOs
 
+- Restrict handlers by method, so you can do things like add separate
+  handlers for POSTs to and GETs from the same path.
+
 - 303 would probably be a better default response to a POST than 404.
 
 - It's silly that deferring a response eats any associated content;
   when reading the request header, should simply do it byte by byte,
-  and stop at the end of the header, so that the response is left
-  within the socket recv buffer. (This would also simplify the code a
-  bit.)
+  and stop at the end of the header, so that the response is left in
+  the socket recv buffer for later retrieval. (This would also
+  simplify the code a bit.)
 
 - Lack of file I/O is a feature rather than a bug, but a handler that
   served files from a particular folder tree would still be useful...
@@ -314,7 +338,9 @@ errors go to =stderr=.
   objects, because it can be a bit inconvenient to default-initialize
   them if they're part of some larger struct.
 
-- Some kind of demo...
+- Auto support for HEAD method?
+
+- Support "Transfer-Encoding: chunked"?
 
 * Other embeddable web serving options
 

@@ -45,6 +45,8 @@ typedef int SOCKET;
 
 #define INVALID_SOCKET (-1)
 
+#define DEBUG_BREAK() (assert(0))
+
 #endif
 
 //////////////////////////////////////////////////////////////////////////
@@ -70,6 +72,8 @@ typedef int socklen_t;
 #pragma warning(error:4020)//too many actual parameters
 #endif//_MSC_VER
 
+#define DEBUG_BREAK() (__debugbreak())
+
 #endif
 
 //////////////////////////////////////////////////////////////////////////
@@ -78,6 +82,15 @@ typedef int socklen_t;
 #include <ctype.h>
 #include <assert.h>
 #include <stdlib.h>
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+#ifndef NDEBUG
+
+#define ENABLE_UNIT_TESTS 1
+
+#endif//NDEBUG
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -747,6 +760,61 @@ static char *fix_up_uri(char *uri_arg)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+static int is_separator_char(char c)
+{
+	switch(c)
+	{
+	default:
+		return 0;
+
+	case '(':
+	case ')':
+	case '<':
+	case '>':
+	case '@':
+	case ',':
+	case ';':
+	case ':':
+	case '\\':
+	case '"':
+	case '{':
+	case '}':
+	case ' ':
+	case '\t':
+		return 1;
+	}
+}
+
+static int is_token_char(char c)
+{
+	if(c<0)
+		return 0;
+
+	if(c>127)
+		return 0;
+
+	if(is_separator_char(c))
+		return 0;
+
+	if(iscntrl(c))
+		return 0;
+
+	return 1;
+}
+
+static int is_lws_char(char c)
+{
+	switch(c)
+	{
+	default:
+		return 0;
+
+	case ' ':
+	case '\t':
+		return 1;
+	}
+}
+
 // pack keys and values tightly in the buffer.
 static int pack_request_fields(char *fields)
 {
@@ -755,7 +823,7 @@ static int pack_request_fields(char *fields)
 
 	while(*src!=0)
 	{
-		if(*src==' '||*src=='\t')
+		if(is_lws_char(*src))
 		{
 			// process continuation line.
 			if(dest==fields)
@@ -770,22 +838,16 @@ static int pack_request_fields(char *fields)
 
 			// collapse upcoming spaces into a single space.
 			*dest++=' ';
-
-			// src could now be behind dest! this will be fixed by the
-			// space-skipping loop below.
 		}
 		else
 		{
-			// copy field key.
-			while(*src!=':')
-			{
-				if(*src=='\r'||*src=='\n'||*src==0)
-				{
-					// ummm... no.
-					return 0;
-				}
-
+			while(is_token_char(*src))
 				*dest++=*src++;
+
+			if(*src!=':')
+			{
+				// ummm... no.
+				return 0;
 			}
 
 			// 0-terminate the field key.
@@ -796,7 +858,7 @@ static int pack_request_fields(char *fields)
 		// copy field value.
 
 		// skip any spaces.
-		while(*src==' '||*src=='\t')
+		while(is_lws_char(*src))
 			++src;
 
 		// copy the chars.
@@ -1052,9 +1114,17 @@ const char *yhs_get_method(yhsRequest *re)
 	return method;
 }
 
-const char *yhs_find_header_field(yhsRequest *re,const char *key)
+const char *yhs_find_header_field(yhsRequest *re,const char *key,const char *last_result)
 {
-	const char *field=re->header_data+re->first_field_pos;
+	const char *field;
+	
+	if(last_result)
+	{
+		assert(last_result>=re->header_data+re->first_field_pos&&last_result<re->header_data+re->header_data_size);
+		field=last_result+strlen(last_result)+1;
+	}
+	else
+		field=re->header_data+re->first_field_pos;
 
 	for(;;)
 	{
@@ -1593,8 +1663,8 @@ YHS_EXTERN int yhs_read_form_content(yhsRequest *re)
     int good=0;
 
 	// Check there's actually some content attached.
-	content_type=yhs_find_header_field(re,"Content-Type");
-	content_length_str=yhs_find_header_field(re,"Content-Length");
+	content_type=yhs_find_header_field(re,"Content-Type",0);
+	content_length_str=yhs_find_header_field(re,"Content-Length",0);
 	if(!content_type||!content_length_str)
 		goto done;
     
@@ -1810,3 +1880,61 @@ yhsHandler *yhs_set_handler_description(const char *description,yhsHandler *hand
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
+
+#if ENABLE_UNIT_TESTS
+#define CHECK(EXPR) ((EXPR)?(void)0:(DEBUG_BREAK(),(void)0))
+#endif//ENABLE_UNIT_TESTS
+
+#if ENABLE_UNIT_TESTS
+static void check_same(const void *a_a,const void *b_a,size_t n)
+{
+	const uint8_t *a=(const uint8_t *)a_a;
+	const uint8_t *b=(const uint8_t *)b_a;
+	size_t i;
+
+	for(i=0;i<n;++i)
+		CHECK(a[i]==b[i]);
+}
+#endif//ENABLE_UNIT_TESTS
+
+void yhs_run_unit_tests(void)
+{
+#if ENABLE_UNIT_TESTS
+
+	// test basic packing of field headers
+	{
+		char input[]=
+			"Key:Value\r\n"
+			"Key: Value\r\n"
+			"Key: Value \r\n";
+
+		char expected[]=
+			"Key\x0Value\x0"
+			"Key\x0Value\x0"
+			"Key\x0Value \x0";
+
+		CHECK(pack_request_fields(input));
+		check_same(input,expected,sizeof expected);
+	}
+
+	// test continuation lines
+	{
+		char input[]=
+			"Key:Value\r\n"
+			"Key2:Value2\r\n"
+			" Value3\r\n"
+			"\tValue4\r\n"
+			" \t Value5\r\n"
+			"Key3:Value6\r\n";
+
+		char expected[]=
+			"Key\x0Value\x0"
+			"Key2\x0Value2 Value3 Value4 Value5\x0"
+			"Key3\x0Value6\x0";
+
+		CHECK(pack_request_fields(input));
+		check_same(input,expected,sizeof expected);
+	}
+
+#endif//ENABLE_UNIT_TESTS
+}

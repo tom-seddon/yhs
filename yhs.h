@@ -343,9 +343,17 @@ YHS_EXTERN const char *yhs_get_path(yhsRequest *re);
 
 YHS_EXTERN const char *yhs_get_method(yhsRequest *re);
 
-YHS_EXTERN const char *yhs_find_header_field(yhsRequest *re,const char *key);
-
+// pass previous result in as `prev', and the search will start from there; pass
+// NULL, and the search will start from the first header line.
 //
+// e.g.,
+//
+// <pre>
+// char *value=0;
+// while(value=yhs_find_header_field(re,"Key",value)) { ... }
+// </pre>
+YHS_EXTERN const char *yhs_find_header_field(yhsRequest *re,const char *key,const char *last_result);
+
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 //
@@ -510,6 +518,14 @@ YHS_EXTERN yhsHandler *yhs_add_to_toc(yhsHandler *handler);
 //
 // - `yhs_set_handler_description' allocates memory.
 YHS_EXTERN yhsHandler *yhs_set_handler_description(const char *description,yhsHandler *handler);
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+// Run unit tests.
+//
+// The tests are performed using `assert'.
+YHS_EXTERN void yhs_run_unit_tests(void);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

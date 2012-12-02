@@ -55,41 +55,11 @@
 struct yhsServer;
 typedef struct yhsServer yhsServer;
 
-struct yhsResponse;
-typedef struct yhsResponse yhsResponse;
+struct yhsRequest;
+typedef struct yhsRequest yhsRequest;
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
-
-struct yhsDeferredResponse
-{
-    yhsServer *server;
-    void *token;
-};
-typedef struct yhsDeferredResponse yhsDeferredResponse;
-
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
-
-// This struct holds some of the arguments to the path handler callback
-// function. Hopefully squirreling it all away like this will help avoid
-// churn if any other arguments crop up.
-struct yhsResPathHandlerArgs
-{
-    // Requested HTTP method.
-    const char *method;
-    
-	// URI parts.
-	//
-	// SCHEME://HOST/PATH;PARAMS?QUERY#FRAGMENT
-	// \____/   \__/\___/ \____/ \___/ \______/
-    const char *res_path;//PATH
-    
-    // Content-Type and Content-Length, when applicable.
-    const char *content_type;
-    int content_length;
-};
-typedef struct yhsResPathHandlerArgs yhsResPathHandlerArgs;
+struct yhsHandler;
+typedef struct yhsHandler yhsHandler;
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -102,9 +72,7 @@ typedef struct yhsResPathHandlerArgs yhsResPathHandlerArgs;
 //
 // context - the context pointer supplied when `yhs_add_res_path_handler' was
 //           called
-//
-// args - points to `yhsResPathHandlerArgs' with any further arguments
-YHS_EXTERN typedef void (*yhsResPathHandlerFn)(yhsResponse *re,void *context,yhsResPathHandlerArgs *args);
+YHS_EXTERN typedef void (*yhsResPathHandlerFn)(yhsRequest *re,void *context);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -190,7 +158,7 @@ YHS_EXTERN int yhs_update(yhsServer *server);
 // response - the response object
 //
 // type - the Content-Type (e.g., "text/html")
-YHS_EXTERN void yhs_data_response(yhsResponse *response,const char *type);
+YHS_EXTERN void yhs_data_response(yhsRequest *req,const char *type);
 
 // Send response text verbatim.
 //
@@ -206,9 +174,9 @@ YHS_EXTERN void yhs_data_response(yhsResponse *response,const char *type);
 //
 // - Space for the expansion is limited; see the MAX_TEXT_LEN
 //   constant.
-YHS_EXTERN void yhs_textf(yhsResponse *response,const char *fmt,...) YHS_PRINTF_LIKE(2,3);
-YHS_EXTERN void yhs_textv(yhsResponse *response,const char *fmt,va_list v);
-YHS_EXTERN void yhs_text(yhsResponse *response,const char *text);
+YHS_EXTERN void yhs_textf(yhsRequest *req,const char *fmt,...) YHS_PRINTF_LIKE(2,3);
+YHS_EXTERN void yhs_textv(yhsRequest *req,const char *fmt,va_list v);
+YHS_EXTERN void yhs_text(yhsRequest *req,const char *text);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -247,9 +215,9 @@ enum yhsHTMLEscapeFlags
 	YHS_HEF_OFF=2,
 };
 
-YHS_EXTERN void yhs_html_textf(yhsResponse *response,unsigned escape_flags,const char *fmt,...) YHS_PRINTF_LIKE(3,4);
-YHS_EXTERN void yhs_html_textv(yhsResponse *response,unsigned escape_flags,const char *fmt,va_list v);
-YHS_EXTERN void yhs_html_text(yhsResponse *response,unsigned escape_flags,const char *text);
+YHS_EXTERN void yhs_html_textf(yhsRequest *req,unsigned escape_flags,const char *fmt,...) YHS_PRINTF_LIKE(3,4);
+YHS_EXTERN void yhs_html_textv(yhsRequest *req,unsigned escape_flags,const char *fmt,va_list v);
+YHS_EXTERN void yhs_html_text(yhsRequest *req,unsigned escape_flags,const char *text);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -263,7 +231,7 @@ YHS_EXTERN void yhs_html_text(yhsResponse *response,unsigned escape_flags,const 
 // data - pointer to data to send
 //
 // data_size - number of chars to send
-YHS_EXTERN void yhs_data(yhsResponse *response,const void *data,size_t data_size);
+YHS_EXTERN void yhs_data(yhsRequest *req,const void *data,size_t data_size);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -287,7 +255,7 @@ YHS_EXTERN void yhs_data(yhsResponse *response,const void *data,size_t data_size
 //
 // - `ncomp' is supposed to mirror the stb_image behaviour a bit, but it's
 //   not really very general.
-YHS_EXTERN void yhs_image_response(yhsResponse *response,int width,int height,int ncomp);
+YHS_EXTERN void yhs_image_response(yhsRequest *req,int width,int height,int ncomp);
 
 // Send the next pixel in an image response.
 //
@@ -297,7 +265,7 @@ YHS_EXTERN void yhs_image_response(yhsResponse *response,int width,int height,in
 //
 // r,g,b,a - red, green, blue and alpha values for the pixel, each 0-255.
 //           (alpha is ignored if ncomp was 3.)
-YHS_EXTERN void yhs_pixel(yhsResponse *respones,int r,int g,int b,int a);
+YHS_EXTERN void yhs_pixel(yhsRequest *respones,int r,int g,int b,int a);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -317,7 +285,7 @@ YHS_EXTERN void yhs_pixel(yhsResponse *respones,int r,int g,int b,int a);
 //
 // - the handler args are used to display the HTTP method and resource path;
 //   if args is NULL, this information won't be provided.
-YHS_EXTERN void yhs_error_response(yhsResponse *response,const char *status_line,yhsResPathHandlerArgs *args);
+YHS_EXTERN void yhs_error_response(yhsRequest *req,const char *status_line);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -336,7 +304,7 @@ YHS_EXTERN void yhs_error_response(yhsResponse *response,const char *status_line
 // - "Unless the request method was HEAD, the entity of the response
 //   SHOULD contain a short hypertext note with a hyperlink to the new
 //   URI(s)." - so perhaps it should do that? But it doesn't.
-YHS_EXTERN void yhs_see_other_response(yhsResponse *response,const char *destination);
+YHS_EXTERN void yhs_see_other_response(yhsRequest *req,const char *destination);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -344,46 +312,40 @@ YHS_EXTERN void yhs_see_other_response(yhsResponse *response,const char *destina
 // Deferred response
 //
 
-// Opt to defer a response. Fills in a yhsDeferredResponse, that can be used
-// to get a yhsResponse back again later.
+// Opt to defer a response. 
 //
 // IN
 //
 // re - the response to put off until later
 //
-// dre - the deferred response object to fill in
+// OUT
+//
+// yhsRequest * - pointer to a new yhsRequest, that should be used later.
 //
 // NOTES
 //
 // - Deferred responses use up resources until they are actually dealt with.
-YHS_EXTERN void yhs_defer_response(yhsResponse *re,yhsDeferredResponse *dre);
-
-// Begin handling a deferred response.
-//
-// IN
-//
-// dre - the deferred response to start responding to
-//
-// OUT
-//
-// yhsResponse * - pointer to a yhsResponse that can be used with
-// `yhs_data_response', etc.
-//
-// NOTES
-//
-// - only one deferred response can be serviced at once; the current one must be
-//   ended before another can be begun.
-//
-// - *dre is reset with `memset'
-YHS_EXTERN yhsResponse *yhs_begin_deferred_response(yhsDeferredResponse *dre);
+YHS_EXTERN yhsRequest *yhs_defer_response(yhsRequest *re);
 
 // Finish handling a deferred response.
 //
 // IN
 //
-// re - the yhsResponse returned from `yhs_begin_deferred_response'
-YHS_EXTERN void yhs_end_deferred_response(yhsResponse *re);
+// re - the yhsRequest returned from `yhs_defer_response'.
+YHS_EXTERN void yhs_end_deferred_response(yhsRequest *re);
 
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+//
+// Getting request details
+
+YHS_EXTERN const char *yhs_get_path(yhsRequest *re);
+
+YHS_EXTERN const char *yhs_get_method(yhsRequest *re);
+
+YHS_EXTERN const char *yhs_find_header_field(yhsRequest *re,const char *key);
+
+//
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 //
@@ -407,7 +369,7 @@ YHS_EXTERN void yhs_end_deferred_response(yhsResponse *re);
 // NOTES
 //
 // - you can fetch the content in pieces.
-YHS_EXTERN int yhs_get_content(yhsResponse *response,int n,char *buf);
+YHS_EXTERN int yhs_get_content(yhsRequest *req,int n,char *buf);
 
 // Access control data from a POSTed form.
 //
@@ -427,7 +389,7 @@ YHS_EXTERN int yhs_get_content(yhsResponse *response,int n,char *buf);
 //   yhs_get_content.
 //
 // - yhs_read_form_content allocates memory.
-YHS_EXTERN int yhs_read_form_content(yhsResponse *response,const yhsResPathHandlerArgs *args);
+YHS_EXTERN int yhs_read_form_content(yhsRequest *req);
 
 // Retrieve value for a control.
 //
@@ -446,7 +408,7 @@ YHS_EXTERN int yhs_read_form_content(yhsResponse *response,const yhsResPathHandl
 //
 // - the return value points into memory that will be freed when your
 //   handler returns.
-YHS_EXTERN const char *yhs_find_control_value(yhsResponse *response,const char *control_name);
+YHS_EXTERN const char *yhs_find_control_value(yhsRequest *req,const char *control_name);
 
 // Get number of controls in form content.
 //
@@ -457,7 +419,7 @@ YHS_EXTERN const char *yhs_find_control_value(yhsResponse *response,const char *
 // OUT
 //
 // size_t - number of controls
-YHS_EXTERN size_t yhs_get_num_controls(yhsResponse *response);
+YHS_EXTERN size_t yhs_get_num_controls(yhsRequest *req);
 
 // Get details about controls in form content.
 //
@@ -471,8 +433,8 @@ YHS_EXTERN size_t yhs_get_num_controls(yhsResponse *response);
 //
 // - the return value points into memory that will be freed when your
 //   handler returns.
-YHS_EXTERN const char *yhs_get_control_name(yhsResponse *response,size_t index);
-YHS_EXTERN const char *yhs_get_control_value(yhsResponse *response,size_t index);
+YHS_EXTERN const char *yhs_get_control_name(yhsRequest *req,size_t index);
+YHS_EXTERN const char *yhs_get_control_value(yhsRequest *req,size_t index);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -486,13 +448,15 @@ YHS_EXTERN const char *yhs_get_control_value(yhsResponse *response,size_t index)
 //
 // server - the server to add the handler to
 //
-// flags - combination of yhsResPathFlags
-//
 // res_path - path to handle
 //
 // handler_fn - function to handle it
 //
 // context - the usual context pointer thing
+//
+// OUT
+//
+// yhsHandler * - a token representing the handler
 //
 // NOTES
 //
@@ -508,15 +472,44 @@ YHS_EXTERN const char *yhs_get_control_value(yhsResponse *response,size_t index)
 // - The matching isn't recursive, which is a bit crap.
 //
 // - `yhs_add_res_path_handler' allocates memory.
+YHS_EXTERN yhsHandler *yhs_add_res_path_handler(yhsServer *server,const char *res_path,yhsResPathHandlerFn handler_fn,void *context);
 
-enum yhsResPathFlags
-{
-	// If set, this path should appear in the automatically-generated table of
-    // contents.
-	YHS_RPF_TOC=1,
-};
+// Add the given handler to the TOC.
+//
+// IN
+//
+// handler - the handler to add to the TOC
+//
+// OUT
+//
+// yhsHandler * - the value of the handler parameter
+//
+// NOTES
+//
+// - if description is NULL, the description is formed from the path
+YHS_EXTERN yhsHandler *yhs_add_to_toc(yhsHandler *handler);
 
-YHS_EXTERN void yhs_add_res_path_handler(yhsServer *server,unsigned flags,const char *res_path,yhsResPathHandlerFn handler_fn,void *context);
+// Set the description for the given handler. If a description is set, it is
+// used when displaying the TOC.
+//
+// IN
+//
+// description - the description to set
+//
+// handler - the handler
+//
+// OUT
+//
+// yhsHandler * - the value of the handler parameter
+//
+// NOTES
+//
+// - having the object as the last parameter is kind of inconsistent, compared
+//   to everything else; it's supposed to be easier to read if multiple calls
+//   are chained.
+//
+// - `yhs_set_handler_description' allocates memory.
+YHS_EXTERN yhsHandler *yhs_set_handler_description(const char *description,yhsHandler *handler);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

@@ -21,6 +21,7 @@
 #include <vector>
 
 static const int PORT=35000;
+static bool g_quit=false;
 
 // Simple YHS test.
 //
@@ -36,34 +37,34 @@ static const int PORT=35000;
 //
 // /defer.html - demonstration of deferred bits
 
-static void HandleFolder(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
+static void HandleFolder(yhsRequest *re,void *context)
 {
-    (void)context,(void)args;
+    (void)context;
     
     yhs_data_response(re,"text/html");
     
     yhs_text(re,"<html><head><title>Example Folder</title></head><body><p>Handler for folder.</p></body></html>");
 }
 
-static void HandleRedir(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
+static void HandleRedir(yhsRequest *re,void *context)
 {
-	(void)context,(void)args;
+	(void)context;
 
 	yhs_see_other_response(re,"/file");
 }
 
-static void HandleFile(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
+static void HandleFile(yhsRequest *re,void *context)
 {
-    (void)context,(void)args;
+    (void)context;
     
     yhs_data_response(re,"text/plain");
     
     yhs_text(re,"Handler for individual file.");
 }
 
-static void HandleImage(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
+static void HandleImage(yhsRequest *re,void *context)
 {
-    (void)context,(void)args;
+    (void)context;
     
     yhs_image_response(re,512,512,3);
     
@@ -75,19 +76,19 @@ static void HandleImage(yhsResponse *re,void *context,yhsResPathHandlerArgs *arg
     }
 }
 
-static void HandleFormHTML(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
+static void HandleFormHTML(yhsRequest *re,void *context)
 {
-    (void)context,(void)args;
+	bool defer=!!context;
     
 	yhs_data_response(re,"text/html");
 
-    yhs_text(re,"<html><head><title>Some junk for testing form get/post etc.</title></head>\n");
+	yhs_textf(re,"<html><head><title>Test form GET/POST%s</title></head>\n",defer?" (deferred)":"");
     yhs_text(re,"\n");
-    yhs_text(re,"<!-- stolen from http://www.w3.org/TR/REC-html40/interact/forms.html -->\n");
+    yhs_text(re,"<!-- see http://www.w3.org/TR/REC-html40/interact/forms.html -->\n");
     yhs_text(re,"\n");
     yhs_text(re,"<body>\n");
     yhs_text(re,"\n");
-    yhs_text(re,"<FORM action=\"status\" method=\"post\">\n");
+	yhs_textf(re,"<FORM action=\"%s\" method=\"post\">\n",defer?"status_deferred":"status");
     yhs_text(re," <P>\n");
     yhs_text(re," <FIELDSET>\n");
     yhs_text(re,"  <LEGEND>Personal Information</LEGEND>\n");
@@ -139,11 +140,11 @@ static void HandleFormHTML(yhsResponse *re,void *context,yhsResPathHandlerArgs *
     yhs_text(re,"</html>\n");
 }
 
-static void HandleStatus(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
+static void HandleStatus(yhsRequest *re,void *context)
 {
 	(void)context;
 
-    if(yhs_read_form_content(re,args))
+    if(yhs_read_form_content(re))
     {
         printf("%s: %u controls:\n",__FUNCTION__,unsigned(yhs_get_num_controls(re)));
         
@@ -162,27 +163,35 @@ static void HandleStatus(yhsResponse *re,void *context,yhsResPathHandlerArgs *ar
 struct Deferred
 {
     unsigned when;
-    yhsDeferredResponse dre;
+    yhsRequest *dre;
+	void (*fn)(yhsRequest *);
+
+	Deferred(unsigned when_a,yhsRequest *re,void (*fn_a)(yhsRequest *)):
+	when(when_a),
+	dre(yhs_defer_response(re)),
+	fn(fn_a)
+	{
+	}
 };
 
 static std::vector<Deferred> g_deferreds;
 static unsigned g_now;
 
-static void DeferImage(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
+static void DeferredImage(yhsRequest *re)
 {
-    (void)context,(void)args;
-    
-    Deferred d;
-    
-    d.when=g_now+int(size_t(context))*100;
-    yhs_defer_response(re,&d.dre);
-    
-    g_deferreds.push_back(d);
+	yhs_image_response(re,64,64,3);
+	for(int i=0;i<64*64;++i)
+		yhs_pixel(re,rand()&0xFF,rand()&0xFF,rand()&0xFF,255);
 }
 
-static void DeferHTML(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
+static void DeferImage(yhsRequest *re,void *context)
 {
-    (void)context,(void)args;
+	g_deferreds.push_back(Deferred(g_now+int(size_t(context))*100,re,&DeferredImage));
+}
+
+static void DeferHTML(yhsRequest *re,void *context)
+{
+    (void)context;
     
     yhs_data_response(re,"text/html");
     
@@ -199,6 +208,13 @@ static void DeferHTML(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
     yhs_text(re,"<p>9 <img src=\"9.png\"></p>");
     
     yhs_text(re,"</body></html>");
+}
+
+static void HandleTerminate(yhsRequest *re,void *context)
+{
+	(void)re,(void)context;
+
+	g_quit=true;
 }
 
 #ifdef WIN32
@@ -224,6 +240,10 @@ int main()
         return EXIT_FAILURE;
     }
 #endif
+
+#ifdef _MSC_VER
+	_CrtSetDbgFlag(_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG)|_CRTDBG_LEAK_CHECK_DF|_CRTDBG_CHECK_ALWAYS_DF);
+#endif
     
     yhsServer *server=yhs_new_server(PORT);
     
@@ -235,24 +255,26 @@ int main()
 
 	yhs_set_server_name(server,"Demo Server");
     
-    yhs_add_res_path_handler(server,YHS_RPF_TOC,"/folder/",&HandleFolder,0);
-	yhs_add_res_path_handler(server,YHS_RPF_TOC,"/file",&HandleFile,0);
-    yhs_add_res_path_handler(server,YHS_RPF_TOC,"/redir",&HandleRedir,0);
-    yhs_add_res_path_handler(server,YHS_RPF_TOC,"/image.png",&HandleImage,0);
-    yhs_add_res_path_handler(server,0,"/1.png",&DeferImage,(void *)1);
-    yhs_add_res_path_handler(server,0,"/2.png",&DeferImage,(void *)2);
-    yhs_add_res_path_handler(server,0,"/3.png",&DeferImage,(void *)3);
-    yhs_add_res_path_handler(server,0,"/4.png",&DeferImage,(void *)4);
-    yhs_add_res_path_handler(server,0,"/5.png",&DeferImage,(void *)5);
-    yhs_add_res_path_handler(server,0,"/6.png",&DeferImage,(void *)6);
-    yhs_add_res_path_handler(server,0,"/7.png",&DeferImage,(void *)7);
-    yhs_add_res_path_handler(server,0,"/8.png",&DeferImage,(void *)8);
-    yhs_add_res_path_handler(server,0,"/9.png",&DeferImage,(void *)9);
-    yhs_add_res_path_handler(server,YHS_RPF_TOC,"/defer.html",&DeferHTML,0);
-    yhs_add_res_path_handler(server,YHS_RPF_TOC,"/form.html",&HandleFormHTML,0);
-    yhs_add_res_path_handler(server,0,"/status",&HandleStatus,0);
-    
-    for(;;)
+    yhs_add_to_toc(yhs_add_res_path_handler(server,"/folder/",&HandleFolder,0));
+	yhs_add_to_toc(yhs_add_res_path_handler(server,"/file",&HandleFile,0));
+    yhs_add_to_toc(yhs_add_res_path_handler(server,"/redir",&HandleRedir,0));
+    yhs_add_to_toc(yhs_add_res_path_handler(server,"/image.png",&HandleImage,0));
+    yhs_add_res_path_handler(server,"/1.png",&DeferImage,(void *)1);
+    yhs_add_res_path_handler(server,"/2.png",&DeferImage,(void *)2);
+    yhs_add_res_path_handler(server,"/3.png",&DeferImage,(void *)3);
+    yhs_add_res_path_handler(server,"/4.png",&DeferImage,(void *)4);
+    yhs_add_res_path_handler(server,"/5.png",&DeferImage,(void *)5);
+    yhs_add_res_path_handler(server,"/6.png",&DeferImage,(void *)6);
+    yhs_add_res_path_handler(server,"/7.png",&DeferImage,(void *)7);
+    yhs_add_res_path_handler(server,"/8.png",&DeferImage,(void *)8);
+    yhs_add_res_path_handler(server,"/9.png",&DeferImage,(void *)9);
+    yhs_add_to_toc(yhs_add_res_path_handler(server,"/defer.html",&DeferHTML,0));
+	yhs_add_to_toc(yhs_add_res_path_handler(server,"/form.html",&HandleFormHTML,(void *)0));
+    yhs_set_handler_description("form with deferred response",yhs_add_to_toc(yhs_add_res_path_handler(server,"/form.html",&HandleFormHTML,(void *)1)));
+    yhs_add_res_path_handler(server,"/status",&HandleStatus,0);
+	yhs_add_to_toc(yhs_add_res_path_handler(server,"/terminate",&HandleTerminate,0));
+
+    while(!g_quit)
     {
         yhs_update(server);
         
@@ -269,13 +291,9 @@ int main()
         {
             if(g_now>=it->when)
             {
-                yhsResponse *re=yhs_begin_deferred_response(&it->dre);
-                
-                yhs_image_response(re,64,64,3);
-                for(int i=0;i<64*64;++i)
-                    yhs_pixel(re,rand()&0xFF,rand()&0xFF,rand()&0xFF,255);
-                
-                yhs_end_deferred_response(re);
+				(*it->fn)(it->dre);
+
+                yhs_end_deferred_response(it->dre);
                 
                 it=g_deferreds.erase(it);
             }
@@ -283,4 +301,13 @@ int main()
                 ++it;
         }
     }
+
+	yhs_delete_server(server);
+	server=0;
+
+// #ifdef _MSC_VER
+// 	_CrtDumpMemoryLeaks();
+// #endif
+
+	return EXIT_SUCCESS;
 }

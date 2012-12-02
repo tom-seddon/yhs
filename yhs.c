@@ -66,6 +66,10 @@ typedef unsigned __int8 uint8_t;
 
 typedef int socklen_t;
 
+#ifdef _MSC_VER
+#pragma warning(error:4020)//too many actual parameters
+#endif//_MSC_VER
+
 #endif
 
 //////////////////////////////////////////////////////////////////////////
@@ -175,19 +179,25 @@ enum
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-struct Handler
+enum HandlerFlags
 {
-    struct Handler *next,*prev;
+	HF_TOC=1,
+};
+
+struct yhsHandler
+{
+    struct yhsHandler *next,*prev;
 
 	unsigned flags;
     
     char *res_path;
     size_t res_path_len;
+
+	char *description;
     
     yhsResPathHandlerFn handler_fn;
     void *context;
 };
-typedef struct Handler Handler;
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -211,6 +221,11 @@ typedef struct PNGWriteState PNGWriteState;
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+enum yhsResponseFlags
+{
+	RF_DEFERRED=1,
+};
+
 enum yhsResponseType
 {
     RT_NONE_SET,
@@ -227,23 +242,33 @@ struct KeyValuePair
 };
 typedef struct KeyValuePair KeyValuePair;
 
-struct yhsResponse
+// SCHEME://HOST/PATH;PARAMS?QUERY#FRAGMENT
+// \____/   \__/\___/ \____/ \___/ \______/
+
+struct yhsRequest
 {
+	yhsRequest *next_deferred;
+
+	unsigned flags;
     yhsServer *server;
     
     SOCKET sock;
     yhsResponseType type;
-    
+
+	// pngstuff
     PNGWriteState png;
 
-    // pointer to first part of content.
-    char *content;
-    int content_size;
-    
     // form data
     size_t num_controls;
     KeyValuePair *controls;
     char *controls_data_buffer;
+
+	// header data
+	char *header_data;
+	size_t header_data_size;
+	size_t method_pos;
+	size_t path_pos;
+	size_t first_field_pos;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -255,12 +280,11 @@ struct yhsServer
     SOCKET listen_sock;
     
     // doubly-linked. terminator has NULL handler_fn.
-    Handler handlers;
-    
-    // Temporary yhsResponse for handling deferred responses.
-    yhsResponse tmp_re;
-    int is_tmp_re_in_use;
+    yhsHandler handlers;
 
+	// singly-linked.
+	yhsRequest *first_deferred;
+    
     // buffer for pending writes.
     char write_buf[WRITE_BUF_SIZE];
     size_t write_buf_data_size;
@@ -504,7 +528,7 @@ void yhs_set_server_name(yhsServer *server,const char *name)
 
 void yhs_delete_server(yhsServer *server)
 {
-    Handler *h;
+    yhsHandler *h;
     
     if(!server)
         return;
@@ -512,7 +536,7 @@ void yhs_delete_server(yhsServer *server)
     h=server->handlers.next;
     while(h->handler_fn)
     {
-        Handler *next=h->next;
+        yhsHandler *next=h->next;
         
         FREE(h->res_path);
         FREE(h);
@@ -590,13 +614,13 @@ static int accept_request(SOCKET listen_sock,SOCKET *accepted_sock)
     return 1;
 }
 
-static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *data_size,size_t *request_size)
+static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *request_size)
 {
     // Keep reading until the data ends with the \r\n\r\n that signifies the
     // end of the request, or there's no more buffer space.
     int good=0;
     
-    *data_size=0;
+    *request_size=0;
     
     for(;;)
     {
@@ -616,14 +640,14 @@ static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *dat
             break;
         }
         
-        if(*data_size==buf_size)
+        if(*request_size==buf_size)
         {
             // Too much data in request header.
             YHS_ERR_MSG("Request too large.");
             break;
         }
         
-        n=recv(sock,buf+*data_size,(int)(buf_size-*data_size),0);
+        n=recv(sock,buf+*request_size,1,0);
         if(n<=0)
         {
             // Error, or client closed connection prematurely.
@@ -633,28 +657,26 @@ static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *dat
             break;
         }
         
-        *data_size+=n;
+        *request_size+=n;
         
         // Is there a \r\n\r\n yet?
-        if(*data_size>=4)
+        if(*request_size>=4)
         {
-            size_t i;
-            
-            for(i=0;i<*data_size-3;++i)
-            {
-                if(buf[i+0]=='\r'&&buf[i+1]=='\n'&&buf[i+2]=='\r'&&buf[i+3]=='\n')
-                {
-                    *request_size=i+4;
-                    good=1;
-                    
-                    // Any associated data from the browser may be partly in
-                    // the buffer after the end of the request, and partly in
-                    // the socket's recv buffer.
-                    
-                    goto done;
-                }
-            }
-        }
+			if(strncmp(buf+*request_size-4,"\r\n\r\n",4)==0)
+			{
+				// 0-terminate so it ends with a single \r\n, and adjust the
+                // size accordingly.
+				*(buf+*request_size-2)=0;
+				*request_size-=2;
+
+				good=1;
+
+				// Any associated data from the browser is in the socket's recv
+				// buffer.
+
+				goto done;
+			}
+		}
     }
     
 done:;
@@ -676,7 +698,7 @@ static char unhex(char nybble)
         return 0;
 }
 
-static const char *fix_up_uri(char *uri_arg)
+static char *fix_up_uri(char *uri_arg)
 {
     // @TODO: IE lets you type, like, "http:\\xyz\etc" - how does that end up?
     static char http_prefix[]="http://";
@@ -694,7 +716,7 @@ static const char *fix_up_uri(char *uri_arg)
         if(!uri)
         {
             // Malformed URI, I think? Return something sensible anyway.
-            return "/";
+            return 0;
         }
     }
     
@@ -724,147 +746,127 @@ static const char *fix_up_uri(char *uri_arg)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-// Splits an HTTP request line ("METHOD URI HTTP-Ver") into its method and
-// URI path parts. *method and *res_path point into line[], which has 0s
-// poked in as appropriate.
-static int tokenize_request_line(char *line,const char **method,const char **res_path)
+// pack keys and values tightly in the buffer.
+static int pack_request_fields(char *fields)
 {
-    const char *http_version;
-    char *uri;
-    
-    *method=strtok(line," ");
-    
-    uri=strtok(NULL," ");
-    
-    http_version=strtok(NULL," ");
-    (void)http_version;//but you might like to see it in the debugger.
-    
-    *res_path=fix_up_uri(uri);
-    
-    return 1;
-}
+	char *dest=fields;
+	char *src=fields;
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+	while(*src!=0)
+	{
+		if(*src==' '||*src=='\t')
+		{
+			// process continuation line.
+			if(dest==fields)
+			{
+				// first line may not be a continuation line.
+				return 0;
+			}
 
-// Splits an HTTP header line ("Key:Value") into its key and value parts.
-// *key and *value point into line[], which has 0s poked in as appropriate.
-static int tokenize_header_line(char *line,const char **key,const char **value)
-{
-    char *colon,*key_end;
-    
-    colon=strchr(line,':');
-    if(!colon)
-        return 0;
-    
-    key_end=colon;
-    *key_end--=0;
-    
-    while(key_end>line&&isspace(*key_end))
-        *key_end--=0;
-    
-    if(key_end==line)
-        return 0;
-    
-    *key=line;
-    
-    *value=colon+1;
-    while(**value!=0&&isspace(**value))
-        ++*value;
-    
-    if(**value==0)
-        return 0;
-    
-    return 1;
-}
+			// back up to overwrite the '\x0'.
+			--dest;
+			assert(*dest==0);
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+			// collapse upcoming spaces into a single space.
+			*dest++=' ';
 
-static char *do_line(char **pos)
-{
-    char *line_start=*pos;
-    char *line_end=strstr(*pos,"\r\n");
-    
-    if(!line_end)
-    {
-        line_end=*pos+strlen(*pos);
-        *pos=line_end;
-    }
-    else
-    {
-        *pos=line_end+2;
-        *line_end=0;
-    }
-    
-    return line_start;
+			// src could now be behind dest! this will be fixed by the
+			// space-skipping loop below.
+		}
+		else
+		{
+			// copy field key.
+			while(*src!=':')
+			{
+				if(*src=='\r'||*src=='\n'||*src==0)
+				{
+					// ummm... no.
+					return 0;
+				}
+
+				*dest++=*src++;
+			}
+
+			// 0-terminate the field key.
+			*dest++=0;
+			++src;
+		}
+
+		// copy field value.
+
+		// skip any spaces.
+		while(*src==' '||*src=='\t')
+			++src;
+
+		// copy the chars.
+		while(*src!='\r')
+		{
+			if(*src==0)
+			{
+				// ummm... no.
+				return 0;
+			}
+
+			*dest++=*src++;
+		}
+
+		// 0-terminate the field value.
+		*dest++=0;
+		++src;
+
+		// all newlines must be CRLF.
+		if(*src!='\n')
+		{
+			// not CRLF.
+			return 0;
+		}
+
+		++src;
+	}
+
+	// pop a final 0 in, to signal the end.
+	*dest=0;
+
+	return 1;
 }
 
 // Takes an HTTP request (request line, then header lines) and fishes out the
 // interesting parts: method, resource path, pointer to first header line.
-static int parse_request(char *request,const char **method,const char **res_path,char **first_header_line)
+static int process_request_header(char *request,size_t *method_pos,size_t *res_path_pos,size_t *first_header_line_pos)
 {
-    char *pos=request;
-    char *request_line=do_line(&pos);
-    
-    if(!tokenize_request_line(request_line,method,res_path))
-        return 0;
-    
-    *first_header_line=pos;
-    
-    return 1;
-}
+	char *method;
+	char *uri;
+	const char *http_version;
 
-static int parse_request_header(char *first_header_line,const char *key0,...)
-{
-    char *pos=first_header_line;
-    
-    if(key0)
-    {
-        va_list v;
-        const char *key;
-        
-        va_start(v,key0);
-        
-        for(key=key0;key;key=va_arg(v,const char *))
-            *va_arg(v,const char **)=NULL;
-        
-        va_end(v);
-    }
-    
-    for(;;)
-    {
-        const char *header_key,*header_value;
-        char *header_line=do_line(&pos);
-        
-        if(strlen(header_line)==0)
-            break;
-        
-        if(!tokenize_header_line(header_line,&header_key,&header_value))
-            return 0;
-        
-        if(key0)
-        {
-            va_list v;
-            const char *key;
-            
-            va_start(v,key0);
-            
-            for(key=key0;key;key=va_arg(v,const char *))
-            {
-                const char **value=va_arg(v,const char **);
-                
-                if(strcmp(header_key,key)==0)
-                {
-                    *value=header_value;
-                    break;
-                }
-            }
-            
-            va_end(v);
-        }
-    }
-    
+	// find line end - first header line is just past it
+	char *line_end=strstr(request,"\r\n");
+	if(!line_end)
+		return 0;
+
+	*first_header_line_pos=line_end+2-request;
+
+	// 0-terminate first line
+	*line_end=0;
+
+	// find the parts.
+	method=strtok(request," ");
+	uri=strtok(0," ");
+	http_version=strtok(0," ");
+
+	// fix up URI.
+	uri=fix_up_uri(uri);
+	if(!uri)
+		return 0;
+
+	// turn them into offsets.
+	*method_pos=method-request;
+	*res_path_pos=uri-request;
+	(void)http_version;
+
+	// pack the request fields.
+	if(!pack_request_fields(request+*first_header_line_pos))
+		return 0;
+
     return 1;
 }
 
@@ -872,7 +874,7 @@ static int parse_request_header(char *first_header_line,const char *key0,...)
 //////////////////////////////////////////////////////////////////////////
 
 // yhsResPathHandlerFn that prints a 404 message.
-//static void error_handler(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
+//static void error_handler(yhsRequest *re,void *context,yhsResPathHandlerArgs *args)
 //{
 //    yhs_data_response(re,"text/html");
 //    
@@ -896,19 +898,19 @@ static int parse_request_header(char *first_header_line,const char *key0,...)
 
 // Finds most appropriate res path handler for the given res path, which may
 // refer to a file or a folder.
-static int find_handler(yhsServer *server,const yhsResPathHandlerArgs *args,yhsResPathHandlerFn *handler_fn,void **context)
+static int find_handler_for_res_path(yhsServer *server,yhsResPathHandlerFn *handler_fn,void **context,const char *res_path)
 {
-    Handler *h;
-    size_t res_path_len=strlen(args->res_path);
+    yhsHandler *h;
+    size_t res_path_len=strlen(res_path);
     
     for(h=server->handlers.prev;h->handler_fn;h=h->prev)
     {
         if(res_path_len>=h->res_path_len)
         {
-            if(strncmp(h->res_path,args->res_path,h->res_path_len)==0)
+            if(strncmp(h->res_path,res_path,h->res_path_len)==0)
             {
                 if(res_path_len==h->res_path_len||
-                   (h->res_path[h->res_path_len-1]=='/'&&!strchr(args->res_path+h->res_path_len,'/')))
+                   (h->res_path[h->res_path_len-1]=='/'&&!strchr(res_path+h->res_path_len,'/')))
                 {
                     *handler_fn=h->handler_fn;
                     *context=h->context;
@@ -922,17 +924,16 @@ static int find_handler(yhsServer *server,const yhsResPathHandlerArgs *args,yhsR
     return 0;
 }
 
-static void flush_write_buf(yhsResponse *re);
+static void flush_write_buf(yhsRequest *re);
 
-static void reset_response(yhsResponse *re,yhsServer *server,SOCKET sock)
+static void reset_request(yhsRequest *re)
 {
-    memset(re,0,sizeof *re);
-    
-    re->server=server;
-    re->sock=sock;
+	memset(re,0,sizeof *re);
+
+	re->sock=INVALID_SOCKET;
 }
 
-static void finish_response(yhsResponse *re)
+static void finish_response(yhsRequest *re)
 {
     if(re->type==RT_IMAGE)
         assert(re->png.y==re->png.h);
@@ -940,9 +941,15 @@ static void finish_response(yhsResponse *re)
     flush_write_buf(re);
     
     CLOSESOCKET(re->sock);
+
+	FREE(re->controls);
+	FREE(re->controls_data_buffer);
+	FREE(re->header_data);
+
+	reset_request(re);
 }
 
-static void header(yhsResponse *re,yhsResponseType type,const char *status,const char *key0,...)
+static void header(yhsRequest *re,yhsResponseType type,const char *status,const char *key0,...)
 {
 	const char *key;
 	va_list v;
@@ -995,11 +1002,11 @@ static void debug_dump_string(const char *str,int max_len)
     }
 }
 
-static void toc_handler(yhsResponse *re,void *context,yhsResPathHandlerArgs *args)
+static void toc_handler(yhsRequest *re,void *context)
 {
-	Handler *h;
+	yhsHandler *h;
 
-	(void)args,(void)context;
+	(void)context;
 
 	yhs_data_response(re,"text/html");
 	
@@ -1010,12 +1017,56 @@ static void toc_handler(yhsResponse *re,void *context,yhsResPathHandlerArgs *arg
 	
 	for(h=re->server->handlers.next;h->handler_fn;h=h->next)
 	{
-		if(h->flags&YHS_RPF_TOC)
-			yhs_html_textf(re,YHS_HEF_OFF," <p><a href=\"\x1by%s\x1bn\">\x1by%s\x1bn</a></p>\n",h->res_path,h->res_path);
+		if(h->flags&HF_TOC)
+		{
+			yhs_html_textf(re,YHS_HEF_OFF," <p><a href=\"\x1by%s\x1bn\">",h->res_path);
+			
+			if(h->description)
+				yhs_html_textf(re,0,"%s (",h->description);
+
+			yhs_html_textf(re,YHS_HEF_OFF,"<tt>\x1by%s\x1bn</tt>",h->res_path);
+
+			if(h->description)
+				yhs_textf(re,")");
+
+			yhs_textf(re,"\n");
+		}
 	}
 	
 	yhs_textf(re," </body>\n");
 	yhs_textf(re,"</html>\n");
+}
+
+const char *yhs_get_path(yhsRequest *re)
+{
+	const char *path=re->header_data+re->path_pos;
+	return path;
+}
+
+const char *yhs_get_method(yhsRequest *re)
+{
+	const char *method=re->header_data+re->method_pos;
+	return method;
+}
+
+const char *yhs_find_header_field(yhsRequest *re,const char *key)
+{
+	const char *field=re->header_data+re->first_field_pos;
+
+	for(;;)
+	{
+		const char *k=field;
+		size_t n=strlen(k);
+		const char *v=k+n+1;
+		
+		if(n==0)
+			return 0;
+
+		if(strcmp(k,key)==0)
+			return v;
+
+		field=v+strlen(v)+1;
+	}
 }
 
 int yhs_update(yhsServer *server)
@@ -1027,64 +1078,52 @@ int yhs_update(yhsServer *server)
     
     for(;;)
     {
-        // incoming data socket
-        SOCKET accepted_sock;
-        
         // response gunk
         const char *response_line=NULL;
         yhsResPathHandlerFn handler_fn=NULL;
         void *context=NULL;
-        yhsResPathHandlerArgs args={0};
-        yhsResponse re;
+        yhsRequest re;
         
         // request and parts
-        char data[MAX_REQUEST_SIZE+1];
-        size_t data_size,request_size;
-        char *request_header;
+		const char *path;
+        char header_data_buf[MAX_REQUEST_SIZE+1];
         
-        if(!accept_request(server->listen_sock,&accepted_sock))
+		reset_request(&re);
+
+        if(!accept_request(server->listen_sock,&re.sock))
             break;
         
         any=1;
-        
-        reset_response(&re,server,accepted_sock);
-        
-        if(!read_request_header(accepted_sock,data,sizeof data-1,&data_size,&request_size))
+        re.server=server;
+
+		re.server=server;
+        re.header_data=header_data_buf;
+
+		// read header and 0-terminate so that it ends with a single \r\n.
+        if(!read_request_header(re.sock,re.header_data,MAX_REQUEST_SIZE,&re.header_data_size))
         {
             response_line="500 Internal Server Error";
             goto respond;
         }
         
-        // 0-terminate the request; it now ends with a single \r\n.
-        data[request_size-2]=0;
-        
-        YHS_DEBUG_MSG("REQUEST(RAW): %u/%u bytes:\n---8<---\n",(unsigned)request_size,(unsigned)data_size);
-        debug_dump_string(data,-1);
+        YHS_DEBUG_MSG("REQUEST(RAW): %u/%u bytes:\n---8<---\n",(unsigned)re.header_data_size,(unsigned)re.header_data);
+        debug_dump_string(re.header_data,-1);
         YHS_DEBUG_MSG("\n---8<---\n");
         
-        // Store first part of content, if there is any
-        if(request_size!=data_size)
-        {
-            YHS_DEBUG_MSG("BODY(RAW):\n---8<---\n");
-            debug_dump_string(data+request_size,data_size-request_size);
-            YHS_DEBUG_MSG("\n---8<---\n");
-            
-            re.content=data+request_size;
-            re.content_size=data_size-request_size;
-        }
-        
-        if(!parse_request(data,&args.method,&args.res_path,&request_header))
+        if(!process_request_header(re.header_data,&re.method_pos,&re.path_pos,&re.first_field_pos))
         {
             response_line="400 Bad Request";
             goto respond;
         }
-        
-        YHS_INFO_MSG("REQUEST: Method: %s\n",args.method);
-        YHS_INFO_MSG("         Res Path: \"%s\"\n",args.res_path);
 
-        if(!find_handler(server,&args,&handler_fn,&context))
+		path=yhs_get_path(&re);
+        
+        YHS_INFO_MSG("REQUEST: Method: %s\n",yhs_get_method(&re));
+        YHS_INFO_MSG("         Res Path: \"%s\"\n",path);
+
+        if(!find_handler_for_res_path(server,&handler_fn,&context,path))
         {
-			if(strcmp(args.res_path,"/")==0)
+			if(strcmp(path,"/")==0)
 			{
 				handler_fn=&toc_handler;
 				context=NULL;
@@ -1096,43 +1135,20 @@ int yhs_update(yhsServer *server)
 			}
         }
         
-		// Check method and perform any method-specific processing.
-        if(strcmp(args.method,"GET")==0)
-        {
-        }
-        else if(strcmp(args.method,"POST")==0)
-        {
-            const char *content_length;
-            
-            if(!parse_request_header(request_header,"Content-Type",&args.content_type,"Content-Length",&content_length,NULL))
-            {
-                response_line="400 Bad Request";
-                goto respond;
-            }
-            
-            if(content_length)
-                args.content_length=atoi(content_length);
-        }
-        else
-            response_line="501 Not Implemented";
-        
     respond:
 		if(!response_line)
 		{
-			(*handler_fn)(&re,context,&args);
+			(*handler_fn)(&re,context);
 		
 			if(re.type==RT_NONE_SET)
 				response_line="404 Not Found";
 		}
 		
 		if(response_line)
-			yhs_error_response(&re,response_line,&args);
+			yhs_error_response(&re,response_line);
 		
 		if(re.type!=RT_DEFER)
 			finish_response(&re);
-		
-		FREE(re.controls_data_buffer);
-		FREE(re.controls);
     }
 
     return any;
@@ -1141,7 +1157,7 @@ int yhs_update(yhsServer *server)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-static void flush_write_buf(yhsResponse *re)
+static void flush_write_buf(yhsRequest *re)
 {
     if(re->server->write_buf_data_size>0)
     {
@@ -1153,7 +1169,7 @@ static void flush_write_buf(yhsResponse *re)
     }
 }
 
-void yhs_data_response(yhsResponse *re,const char *type)
+void yhs_data_response(yhsRequest *re,const char *type)
 {
     assert(re->type==RT_NONE_SET);
 	
@@ -1163,7 +1179,7 @@ void yhs_data_response(yhsResponse *re,const char *type)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-void yhs_textf(yhsResponse *re,const char *fmt,...)
+void yhs_textf(yhsRequest *re,const char *fmt,...)
 {
     va_list v;
     va_start(v,fmt);
@@ -1171,7 +1187,7 @@ void yhs_textf(yhsResponse *re,const char *fmt,...)
     va_end(v);
 }
 
-void yhs_textv(yhsResponse *re,const char *fmt,va_list v)
+void yhs_textv(yhsRequest *re,const char *fmt,va_list v)
 {
     char text[MAX_TEXT_LEN];
     
@@ -1183,7 +1199,7 @@ void yhs_textv(yhsResponse *re,const char *fmt,va_list v)
     yhs_text(re,text);
 }
 
-void yhs_text(yhsResponse *re,const char *text)
+void yhs_text(yhsRequest *re,const char *text)
 {
 	yhs_data(re,text,strlen(text));
 }
@@ -1191,7 +1207,7 @@ void yhs_text(yhsResponse *re,const char *text)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-void yhs_html_textf(yhsResponse *re,unsigned escape_flags,const char *fmt,...)
+void yhs_html_textf(yhsRequest *re,unsigned escape_flags,const char *fmt,...)
 {
     va_list v;
     va_start(v,fmt);
@@ -1199,7 +1215,7 @@ void yhs_html_textf(yhsResponse *re,unsigned escape_flags,const char *fmt,...)
     va_end(v);
 }
 
-void yhs_html_textv(yhsResponse *re,unsigned escape_flags,const char *fmt,va_list v)
+void yhs_html_textv(yhsRequest *re,unsigned escape_flags,const char *fmt,va_list v)
 {
     char text[MAX_TEXT_LEN];
     
@@ -1209,7 +1225,7 @@ void yhs_html_textv(yhsResponse *re,unsigned escape_flags,const char *fmt,va_lis
     yhs_html_text(re,escape_flags,text);
 }
 
-void yhs_html_text(yhsResponse *re,unsigned escape_flags,const char *text)
+void yhs_html_text(yhsRequest *re,unsigned escape_flags,const char *text)
 {
 	int escape=1;//@TODO make this configurable with a flag again??
 	int br=!!(escape_flags&YHS_HEF_BR);
@@ -1252,7 +1268,7 @@ void yhs_html_text(yhsResponse *re,unsigned escape_flags,const char *text)
 	}
 }
 
-void yhs_data(yhsResponse *re,const void *data,size_t data_size)
+void yhs_data(yhsRequest *re,const void *data,size_t data_size)
 {
     size_t i;
     const uint8_t *p=(const uint8_t *)data;
@@ -1275,7 +1291,7 @@ void yhs_data(yhsResponse *re,const void *data,size_t data_size)
 
 static uint32_t yhs_crc_table[256];
 
-static void png8(yhsResponse *re,uint8_t value)
+static void png8(yhsRequest *re,uint8_t value)
 {
     assert(yhs_crc_table[1]!=0);
     
@@ -1284,7 +1300,7 @@ static void png8(yhsResponse *re,uint8_t value)
     yhs_data(re,&value,1);
 }
 
-static void png8_adler(yhsResponse *re,uint8_t value)
+static void png8_adler(yhsRequest *re,uint8_t value)
 {
     png8(re,value);
     
@@ -1295,7 +1311,7 @@ static void png8_adler(yhsResponse *re,uint8_t value)
     re->png.adler32_s2%=65521;
 }
 
-static void png32(yhsResponse *re,uint32_t value)
+static void png32(yhsRequest *re,uint32_t value)
 {
     png8(re,(uint8_t)(value>>24));
     png8(re,(uint8_t)(value>>16));
@@ -1303,7 +1319,7 @@ static void png32(yhsResponse *re,uint32_t value)
     png8(re,(uint8_t)(value>>0));
 }
 
-static void start_png_chunk(yhsResponse *re,uint32_t length,const char *name)
+static void start_png_chunk(yhsRequest *re,uint32_t length,const char *name)
 {
     if(yhs_crc_table[1]==0)
     {
@@ -1327,14 +1343,14 @@ static void start_png_chunk(yhsResponse *re,uint32_t length,const char *name)
     
 }
 
-static void end_png_chunk(yhsResponse *re)
+static void end_png_chunk(yhsRequest *re)
 {
     png32(re,~re->png.chunk_crc);
 }
 
 static const uint8_t png_sig[]={137,80,78,71,13,10,26,10,};
 
-void yhs_image_response(yhsResponse *re,int width,int height,int ncomp)
+void yhs_image_response(yhsRequest *re,int width,int height,int ncomp)
 {
     assert(ncomp==3||ncomp==4);
     assert(re->type==RT_NONE_SET);
@@ -1382,7 +1398,7 @@ void yhs_image_response(yhsResponse *re,int width,int height,int ncomp)
     end_png_chunk(re);
 }
 
-void yhs_pixel(yhsResponse *re,int r,int g,int b,int a)
+void yhs_pixel(yhsRequest *re,int r,int g,int b,int a)
 {
     assert(re->type==RT_IMAGE);
     assert(re->png.y<re->png.h);
@@ -1449,7 +1465,7 @@ void yhs_pixel(yhsResponse *re,int r,int g,int b,int a)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-void yhs_error_response(yhsResponse *re,const char *status_line,yhsResPathHandlerArgs *args)
+void yhs_error_response(yhsRequest *re,const char *status_line)
 {
 	header(re,RT_TEXT,status_line,"Content-Type","text/html",(char *)0);
     
@@ -1461,11 +1477,8 @@ void yhs_error_response(yhsResponse *re,const char *status_line,yhsResPathHandle
     yhs_textf(re,"  <h1>%s - %s</h1>",re->server->name,status_line);
     yhs_textf(re,"  <hr>\n");
 	
-	if(args)
-	{
-		yhs_textf(re,"  <p>HTTP Method: <tt>%s</tt></p>",args->method);
-		yhs_textf(re,"  <p>Resource Path: <tt>%s</tt></p>",args->res_path);
-	}
+	yhs_textf(re,"  <p>HTTP Method: <tt>%s</tt></p>",yhs_get_method(re));
+	yhs_textf(re,"  <p>Resource Path: <tt>%s</tt></p>",yhs_get_path(re));
 	
     yhs_textf(re,"  <hr>\n");
     yhs_textf(re,"  <i>yocto HTTP server - compiled at %s on %s</i>\n",__TIME__,__DATE__);
@@ -1476,7 +1489,7 @@ void yhs_error_response(yhsResponse *re,const char *status_line,yhsResPathHandle
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-void yhs_see_other_response(yhsResponse *re,const char *destination)
+void yhs_see_other_response(yhsRequest *re,const char *destination)
 {
 	header(re,RT_TEXT,"303 See Other","Location",destination,(char *)0);
 }
@@ -1484,72 +1497,50 @@ void yhs_see_other_response(yhsResponse *re,const char *destination)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-void yhs_defer_response(yhsResponse *re,yhsDeferredResponse *dre)
+yhsRequest *yhs_defer_response(yhsRequest *re)
 {
-    assert(re->type==RT_NONE_SET);
-    re->type=RT_DEFER;
-    
-    dre->server=re->server;
-    dre->token=(void *)(size_t)re->sock;
+	yhsRequest *dre;
+
+    //assert(re->type==RT_NONE_SET);
+	assert(!(re->flags&RF_DEFERRED));
+
+	dre=(yhsRequest *)MALLOC(sizeof *dre);
+	*dre=*re;
+
+	// take a copy of the header data.
+	dre->header_data=(char *)MALLOC(re->header_data_size);
+	memcpy(dre->header_data,re->header_data,re->header_data_size);
+
+	// add to the links.
+	dre->next_deferred=dre->server->first_deferred;
+	dre->server->first_deferred=dre;
+
+	// mark original request as deferred, so it can be discarded.
+	reset_request(re);
+	re->type=RT_DEFER;
+
+	return dre;
 }
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-yhsResponse *yhs_begin_deferred_response(yhsDeferredResponse *dre)
+void yhs_end_deferred_response(yhsRequest *re)
 {
-    yhsServer *server=dre->server;
-    
-    assert(!server->is_tmp_re_in_use);
-    
-    reset_response(&server->tmp_re,server,(SOCKET)(size_t)dre->token);
-    server->is_tmp_re_in_use=1;
-    
-    memset(dre,0,sizeof *dre);
-    
-    return &server->tmp_re;
-}
-
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
-
-void yhs_end_deferred_response(yhsResponse *re)
-{
-    assert(re==&re->server->tmp_re);
-    assert(re->server->is_tmp_re_in_use);
+	assert(re->flags&RF_DEFERRED);
     
     finish_response(re);
-    
-    re->server->is_tmp_re_in_use=0;
+
+	FREE(re);
 }
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-int yhs_get_content(yhsResponse *re,int num,char *buf)
+int yhs_get_content(yhsRequest *re,int num,char *buf)
 {
     int num_recvd=0;
     
-    assert(!re->server->is_tmp_re_in_use);
-    
-    // Copy out of content buffer.
-    if(re->content_size>0)
-    {
-        int n=num;
-        if(n>re->content_size)
-            n=re->content_size;
-        
-        memcpy(buf,re->content,n);
-        
-        re->content_size-=n;
-        re->content+=n;
-        num_recvd+=n;
-        
-        if(re->content_size==0)
-            re->content=NULL;
-    }
-    
-    // Fetch from socket.
     while(num_recvd<num)
     {
         int r,is_readable;
@@ -1588,31 +1579,38 @@ int yhs_get_content(yhsResponse *re,int num,char *buf)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-YHS_EXTERN int yhs_read_form_content(yhsResponse *re,const yhsResPathHandlerArgs *args)
+YHS_EXTERN int yhs_read_form_content(yhsRequest *re)
 {
+	const char *content_type;
+	const char *content_length_str;
+	int content_length;
     int good=0;
 
 	// Check there's actually some content attached.
-	if(!args->content_type)
+	content_type=yhs_find_header_field(re,"Content-Type");
+	content_length_str=yhs_find_header_field(re,"Content-Length");
+	if(!content_type||!content_length_str)
 		goto done;
     
     // Sorry, only application/x-www-form-urlencoded for now.
-    if(strcmp(args->content_type,"application/x-www-form-urlencoded")!=0)
+    if(strcmp(content_type,"application/x-www-form-urlencoded")!=0)
         goto done;
     
-    if(args->content_length==0)
+	//
+	content_length=atoi(content_length_str);
+    if(content_length==0)
         goto done;
     
     // Get form data and pop a \0x at the end.
 	assert(!re->controls_data_buffer);
-    re->controls_data_buffer=(char *)MALLOC(args->content_length+1);
+    re->controls_data_buffer=(char *)MALLOC(content_length+1);
     if(!re->controls_data_buffer)
         goto done;
     
-    if(!yhs_get_content(re,args->content_length,re->controls_data_buffer))
+    if(!yhs_get_content(re,content_length,re->controls_data_buffer))
         goto done;
     
-    re->controls_data_buffer[args->content_length]=0;
+    re->controls_data_buffer[content_length]=0;
     
     // Count controls.
     re->num_controls=1;
@@ -1635,7 +1633,7 @@ YHS_EXTERN int yhs_read_form_content(yhsResponse *re,const yhsResPathHandlerArgs
         char *dest=re->controls_data_buffer;
         const char *src=re->controls_data_buffer;
         
-        while(src<re->controls_data_buffer+args->content_length)
+        while(src<re->controls_data_buffer+content_length)
         {
             assert(control<re->controls+re->num_controls);
             
@@ -1702,7 +1700,7 @@ done:
     return good;
 }
 
-YHS_EXTERN const char *yhs_find_control_value(yhsResponse *re,const char *control_name)
+YHS_EXTERN const char *yhs_find_control_value(yhsRequest *re,const char *control_name)
 {
     size_t i;
     
@@ -1717,19 +1715,19 @@ YHS_EXTERN const char *yhs_find_control_value(yhsResponse *re,const char *contro
     return NULL;
 }
 
-YHS_EXTERN size_t yhs_get_num_controls(yhsResponse *re)
+YHS_EXTERN size_t yhs_get_num_controls(yhsRequest *re)
 {
     return re->num_controls;
 }
 
-YHS_EXTERN const char *yhs_get_control_name(yhsResponse *re,size_t index)
+YHS_EXTERN const char *yhs_get_control_name(yhsRequest *re,size_t index)
 {
     assert(index<re->num_controls);
     
     return re->controls[index].key;
 }
 
-YHS_EXTERN const char *yhs_get_control_value(yhsResponse *re,size_t index)
+YHS_EXTERN const char *yhs_get_control_value(yhsRequest *re,size_t index)
 {
     assert(index<re->num_controls);
     
@@ -1739,7 +1737,7 @@ YHS_EXTERN const char *yhs_get_control_value(yhsResponse *re,size_t index)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-static int path_before(const Handler *a,const Handler *b)
+static int path_before(const yhsHandler *a,const yhsHandler *b)
 {
     if(a->res_path_len<b->res_path_len)
         return 1;
@@ -1749,17 +1747,15 @@ static int path_before(const Handler *a,const Handler *b)
     return strcmp(a->res_path,b->res_path)<0;//though actually they don't need to be in alphabetical order.
 }
 
-void yhs_add_res_path_handler(yhsServer *server,unsigned flags,const char *res_path,yhsResPathHandlerFn handler_fn,void *context)
+yhsHandler *yhs_add_res_path_handler(yhsServer *server,const char *res_path,yhsResPathHandlerFn handler_fn,void *context)
 {
-    Handler *h=(Handler *)MALLOC(sizeof *h);
-    Handler *prev;
+    yhsHandler *h=(yhsHandler *)MALLOC(sizeof *h);
+    yhsHandler *prev;
     
     assert(res_path);
     
     memset(h,0,sizeof *h);
 
-	h->flags=flags;
-    
     h->res_path_len=strlen(res_path);
     
     h->res_path=(char *)MALLOC(h->res_path_len+1);
@@ -1780,6 +1776,30 @@ void yhs_add_res_path_handler(yhsServer *server,unsigned flags,const char *res_p
     
     h->next->prev=h;
     h->prev->next=h;
+
+	return h;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+yhsHandler *yhs_add_to_toc(yhsHandler *handler)
+{
+	handler->flags|=HF_TOC;
+
+	return handler;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+yhsHandler *yhs_set_handler_description(const char *description,yhsHandler *handler)
+{
+	FREE(handler->description);
+
+	handler->description=strdup(description);
+
+	return handler;
 }
 
 //////////////////////////////////////////////////////////////////////////

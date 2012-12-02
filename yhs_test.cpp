@@ -23,6 +23,36 @@
 static const int PORT=35000;
 static bool g_quit=false;
 
+static void dump(const void *p_a,size_t n,const char *prefix)
+{
+	const unsigned char *p=(const unsigned char *)p_a;
+
+	for(size_t i=0;i<n;i+=16)
+	{
+		printf("%s%08X: ",prefix,i);
+
+		for(size_t j=0;j<16;++j)
+		{
+			if(i+j<n)
+				printf(" %02X",p[i+j]);
+			else
+				printf(" **");
+		}
+
+		printf("  ");
+
+		for(size_t j=0;j<16;++j)
+		{
+			if(i+j<n)
+				printf("%c",isprint(p[i+j])?p[i+j]:'.');
+			else
+				printf(" ");
+		}
+
+		printf("\n");
+	}
+}
+
 // Simple YHS test.
 //
 // Creates server on port PORT. Visit it using a web browser. Pages:
@@ -151,9 +181,14 @@ static void HandleStatus(yhsRequest *re,void *context)
         for(size_t i=0;i<yhs_get_num_controls(re);++i)
         {
             printf("%u. Name: \"%s\"\n",(unsigned)i,yhs_get_control_name(re,i));
-            printf("    Value:\n---8<---\n");
-            printf("%s\n",yhs_get_control_value(re,i));
-            printf("\n---8<---\n");
+            printf("    Value:\n");
+
+			const char *value=yhs_get_control_value(re,i);
+			dump(value,strlen(value),"        ");
+			
+// 			---8<---\n");
+//             printf("%s\n",yhs_get_control_value(re,i));
+//             printf("\n---8<---\n");
         }
     }
 
@@ -244,6 +279,8 @@ int main()
 #ifdef _MSC_VER
 	_CrtSetDbgFlag(_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG)|_CRTDBG_LEAK_CHECK_DF|_CRTDBG_CHECK_ALWAYS_DF);
 #endif
+
+	yhs_run_unit_tests();
     
     yhsServer *server=yhs_new_server(PORT);
     

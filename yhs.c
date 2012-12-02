@@ -224,6 +224,7 @@ typedef struct PNGWriteState PNGWriteState;
 enum yhsResponseFlags
 {
 	RF_DEFERRED=1,
+	RF_OWN_HEADER_DATA=2,
 };
 
 enum yhsResponseType
@@ -944,7 +945,9 @@ static void finish_response(yhsRequest *re)
 
 	FREE(re->controls);
 	FREE(re->controls_data_buffer);
-	FREE(re->header_data);
+
+	if(re->flags&RF_OWN_HEADER_DATA)
+		FREE(re->header_data);
 
 	reset_request(re);
 }
@@ -1501,15 +1504,18 @@ yhsRequest *yhs_defer_response(yhsRequest *re)
 {
 	yhsRequest *dre;
 
-    //assert(re->type==RT_NONE_SET);
-	assert(!(re->flags&RF_DEFERRED));
+	// TODO - tidy this up. There's no reason a deferred response couldn't be
+    // deferred again, even though it would be a bit pointless.
+	assert(!(re->flags&(RF_DEFERRED|RF_OWN_HEADER_DATA)));
 
 	dre=(yhsRequest *)MALLOC(sizeof *dre);
 	*dre=*re;
+	dre->flags|=RF_DEFERRED;
 
 	// take a copy of the header data.
 	dre->header_data=(char *)MALLOC(re->header_data_size);
 	memcpy(dre->header_data,re->header_data,re->header_data_size);
+	dre->flags|=RF_OWN_HEADER_DATA;
 
 	// add to the links.
 	dre->next_deferred=dre->server->first_deferred;

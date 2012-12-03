@@ -69,35 +69,27 @@ static void dump(const void *p_a,size_t n,const char *prefix)
 //
 // /defer.html - demonstration of deferred bits
 
-static void HandleFolder(yhsRequest *re,void *context)
+static void HandleFolder(yhsRequest *re)
 {
-    (void)context;
-    
     yhs_data_response(re,"text/html");
     
     yhs_text(re,"<html><head><title>Example Folder</title></head><body><p>Handler for folder.</p></body></html>");
 }
 
-static void HandleRedir(yhsRequest *re,void *context)
+static void HandleRedir(yhsRequest *re)
 {
-	(void)context;
-
 	yhs_see_other_response(re,"/file");
 }
 
-static void HandleFile(yhsRequest *re,void *context)
+static void HandleFile(yhsRequest *re)
 {
-    (void)context;
-    
     yhs_data_response(re,"text/plain");
     
     yhs_text(re,"Handler for individual file.");
 }
 
-static void HandleImage(yhsRequest *re,void *context)
+static void HandleImage(yhsRequest *re)
 {
-    (void)context;
-    
     yhs_image_response(re,512,512,3);
     
     for(size_t i=0;i<262144;++i)
@@ -108,9 +100,9 @@ static void HandleImage(yhsRequest *re,void *context)
     }
 }
 
-static void HandleFormHTML(yhsRequest *re,void *context)
+static void HandleFormHTML(yhsRequest *re)
 {
-	bool defer=!!context;
+	bool defer=!!yhs_get_handler_context(re);
     
 	yhs_data_response(re,"text/html");
 
@@ -172,10 +164,8 @@ static void HandleFormHTML(yhsRequest *re,void *context)
     yhs_text(re,"</html>\n");
 }
 
-static void HandleStatus(yhsRequest *re,void *context)
+static void HandleStatus(yhsRequest *re)
 {
-	(void)context;
-
     if(yhs_read_form_content(re))
     {
         printf("%s: %u controls:\n",__FUNCTION__,unsigned(yhs_get_num_controls(re)));
@@ -221,15 +211,15 @@ static void DeferredImage(yhsRequest *re)
 		yhs_pixel(re,rand()&0xFF,rand()&0xFF,rand()&0xFF,255);
 }
 
-static void DeferImage(yhsRequest *re,void *context)
+static void DeferImage(yhsRequest *re)
 {
-	g_deferreds.push_back(Deferred(g_now+int(size_t(context))*100,re,&DeferredImage));
+	int delay=int(size_t(yhs_get_handler_context(re)));
+
+	g_deferreds.push_back(Deferred(g_now+delay*100,re,&DeferredImage));
 }
 
-static void DeferHTML(yhsRequest *re,void *context)
+static void DeferHTML(yhsRequest *re)
 {
-    (void)context;
-    
     yhs_data_response(re,"text/html");
     
     yhs_text(re,"<html><head><title>Deferred Responses</title></head><body>");
@@ -247,9 +237,9 @@ static void DeferHTML(yhsRequest *re,void *context)
     yhs_text(re,"</body></html>");
 }
 
-static void HandleTerminate(yhsRequest *re,void *context)
+static void HandleTerminate(yhsRequest *re)
 {
-	(void)re,(void)context;
+	(void)re;
 
 	g_quit=true;
 }

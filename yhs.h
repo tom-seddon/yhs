@@ -72,7 +72,7 @@ typedef struct yhsHandler yhsHandler;
 //
 // context - the context pointer supplied when `yhs_add_res_path_handler' was
 //           called
-YHS_EXTERN typedef void (*yhsResPathHandlerFn)(yhsRequest *re,void *context);
+YHS_EXTERN typedef void (*yhsResPathHandlerFn)(yhsRequest *re);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -232,6 +232,15 @@ YHS_EXTERN void yhs_html_text(yhsRequest *req,unsigned escape_flags,const char *
 //
 // data_size - number of chars to send
 YHS_EXTERN void yhs_data(yhsRequest *req,const void *data,size_t data_size);
+
+// Send response data.
+//
+// IN
+//
+// response - the response object
+//
+// value - the byte to send
+YHS_EXTERN void yhs_data_byte(yhsRequest *req,unsigned char value);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -415,6 +424,15 @@ YHS_EXTERN const char *yhs_get_method(yhsRequest *re);
 //       printf("%s\n",value);
 // </pre>
 YHS_EXTERN const char *yhs_find_header_field(yhsRequest *re,const char *name,const char *last_result);
+
+// Get the context pointer associated with the handler that was used to service
+// the request.
+YHS_EXTERN void *yhs_get_handler_context(yhsRequest *re);
+
+// Get resource path associated with the handler used to service the request.
+YHS_EXTERN const char *yhs_get_handler_path(yhsRequest *re);
+
+YHS_EXTERN const char *yhs_get_path_handler_relative(yhsRequest *re);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

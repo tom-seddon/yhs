@@ -295,6 +295,7 @@ struct yhsRequest
 
 	unsigned flags;
     yhsServer *server;
+	const yhsHandler *handler;
     
     SOCKET sock;
     yhsResponseType type;
@@ -996,7 +997,7 @@ static int process_request_header(char *request,size_t *method_pos,size_t *res_p
 
 // Finds most appropriate res path handler for the given res path, which may
 // refer to a file or a folder.
-static int find_handler_for_res_path(yhsServer *server,yhsResPathHandlerFn *handler_fn,void **context,const char *res_path)
+static yhsHandler *find_handler_for_res_path(yhsServer *server,const char *res_path)
 {
     yhsHandler *h;
     size_t res_path_len=strlen(res_path);
@@ -1010,10 +1011,7 @@ static int find_handler_for_res_path(yhsServer *server,yhsResPathHandlerFn *hand
                 if(res_path_len==h->res_path_len||
                    (h->res_path[h->res_path_len-1]=='/'&&!strchr(res_path+h->res_path_len,'/')))
                 {
-                    *handler_fn=h->handler_fn;
-                    *context=h->context;
-                    
-                    return 1;
+					return h;
                 }
             }
         }
@@ -1144,11 +1142,12 @@ static void debug_dump_string(const char *str,int max_len)
     }
 }
 
-static void toc_handler(yhsRequest *re,void *context)
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static void handle_toc(yhsRequest *re)
 {
 	yhsHandler *h;
-
-	(void)context;
 
 	yhs_data_response(re,"text/html");
 	
@@ -1179,17 +1178,53 @@ static void toc_handler(yhsRequest *re,void *context)
 	yhs_textf(re,"</html>\n");
 }
 
+static const yhsHandler toc_handler={
+	NULL,NULL,
+	0,
+	"/",1,
+	"TOC handler",
+	&handle_toc,
+	NULL,
+};
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 const char *yhs_get_path(yhsRequest *re)
 {
 	const char *path=re->header_data+re->path_pos;
 	return path;
 }
 
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+const char *yhs_get_path_handler_relative(yhsRequest *re)
+{
+	const char *path=yhs_get_path(re);
+	const char *h_path=yhs_get_handler_path(re);
+	size_t h_path_len=strlen(h_path);
+
+	// TODO: case-insensitiveness...?
+	if(STRNICMP(path,h_path,h_path_len)==0)
+	{
+		path+=h_path_len;
+	}
+
+	return path;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 const char *yhs_get_method(yhsRequest *re)
 {
 	const char *method=re->header_data+re->method_pos;
 	return method;
 }
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
 
 const char *yhs_find_header_field(yhsRequest *re,const char *key,const char *last_result)
 {
@@ -1219,6 +1254,31 @@ const char *yhs_find_header_field(yhsRequest *re,const char *key,const char *las
 	}
 }
 
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+void *yhs_get_handler_context(yhsRequest *re)
+{
+	if(!re->handler)
+		return 0;
+	else
+		return re->handler->context;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+const char *yhs_get_handler_path(yhsRequest *re)
+{
+	if(!re->handler)
+		return "";
+	else
+		return re->handler->res_path;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 int yhs_update(yhsServer *server)
 {
     int any=0;
@@ -1230,8 +1290,6 @@ int yhs_update(yhsServer *server)
     {
         // response gunk
         const char *response_line=NULL;
-        yhsResPathHandlerFn handler_fn=NULL;
-        void *context=NULL;
         yhsRequest re;
         
         // request and parts
@@ -1271,13 +1329,12 @@ int yhs_update(yhsServer *server)
         YHS_INFO_MSG("REQUEST: Method: %s\n",yhs_get_method(&re));
         YHS_INFO_MSG("         Res Path: \"%s\"\n",path);
 
-        if(!find_handler_for_res_path(server,&handler_fn,&context,path))
+		re.handler=find_handler_for_res_path(server,path);
+
+        if(!re.handler)
         {
 			if(strcmp(path,"/")==0)
-			{
-				handler_fn=&toc_handler;
-				context=NULL;
-			}
+				re.handler=&toc_handler;
 			else
 			{
 				response_line="404 Not Found";
@@ -1288,7 +1345,7 @@ int yhs_update(yhsServer *server)
     respond:
 		if(!response_line)
 		{
-			(*handler_fn)(&re,context);
+			(*re.handler->handler_fn)(&re);
 		
 			if(re.type==RT_NONE_SET)
 				response_line="404 Not Found";
@@ -1417,7 +1474,15 @@ void yhs_data(yhsRequest *re,const void *data,size_t data_size)
 	const uint8_t *p=(const uint8_t *)data;
 
 	for(i=0;i<data_size;++i)
-		send_response_byte(re,p[i]);
+		yhs_data_byte(re,p[i]);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+void yhs_data_byte(yhsRequest *re,unsigned char value)
+{
+	send_response_byte(re,value);
 }
 
 //////////////////////////////////////////////////////////////////////////

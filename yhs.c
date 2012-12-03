@@ -192,6 +192,26 @@ enum
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+static char *yhs_strdup(const char *str)
+{
+	size_t n;
+	char *s;
+
+	assert(str);
+
+	n=strlen(str)+1;
+
+	s=MALLOC(n);
+
+	if(s)
+		memcpy(s,str,n);
+
+	return s;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 enum HandlerFlags
 {
 	HF_TOC=1,
@@ -514,6 +534,10 @@ yhsServer *yhs_new_server(int port)
     int good=0;
     
     yhsServer *server=(yhsServer *)MALLOC(sizeof *server);
+
+	if(!server)
+		goto done;
+
     memset(server,0,sizeof *server);
     
     server->handlers.next=&server->handlers;
@@ -1630,17 +1654,29 @@ void yhs_header_field(yhsRequest *re,const char *name,const char *value)
 yhsRequest *yhs_defer_response(yhsRequest *re)
 {
 	yhsRequest *dre;
+	char *new_header_data;
 
 	// TODO - tidy this up. There's no reason a deferred response couldn't be
     // deferred again, even though it would be a bit pointless.
 	assert(!(re->flags&(RF_DEFERRED|RF_OWN_HEADER_DATA)));
 
 	dre=(yhsRequest *)MALLOC(sizeof *dre);
+	new_header_data=(char *)MALLOC(re->header_data_size);
+
+	if(!dre||!new_header_data)
+	{
+		// this is no good, but the original response should still be usable.
+		FREE(dre);
+		FREE(new_header_data);
+
+		return 0;
+	}
+
 	*dre=*re;
 	dre->flags|=RF_DEFERRED;
 
 	// take a copy of the header data.
-	dre->header_data=(char *)MALLOC(re->header_data_size);
+	dre->header_data=new_header_data;
 	memcpy(dre->header_data,re->header_data,re->header_data_size);
 	dre->flags|=RF_OWN_HEADER_DATA;
 
@@ -1759,6 +1795,8 @@ YHS_EXTERN int yhs_read_form_content(yhsRequest *re)
     
     // Controls...
     re->controls=(KeyValuePair *)MALLOC(re->num_controls*sizeof *re->controls);
+	if(!re->controls)
+		goto done;
     
     //
     {
@@ -1883,16 +1921,21 @@ static int path_before(const yhsHandler *a,const yhsHandler *b)
 yhsHandler *yhs_add_res_path_handler(yhsServer *server,const char *res_path,yhsResPathHandlerFn handler_fn,void *context)
 {
     yhsHandler *h=(yhsHandler *)MALLOC(sizeof *h);
+	char *h_res_path=yhs_strdup(res_path);
     yhsHandler *prev;
     
-    assert(res_path);
+	if(!h||!h_res_path)
+	{
+		FREE(h);
+		FREE(h_res_path);
+
+		return 0;
+	}
     
     memset(h,0,sizeof *h);
 
-    h->res_path_len=strlen(res_path);
-    
-    h->res_path=(char *)MALLOC(h->res_path_len+1);
-    memcpy(h->res_path,res_path,h->res_path_len+1);
+    h->res_path=h_res_path;
+	h->res_path_len=strlen(h->res_path);
     
     h->handler_fn=handler_fn;
     
@@ -1928,9 +1971,14 @@ yhsHandler *yhs_add_to_toc(yhsHandler *handler)
 
 yhsHandler *yhs_set_handler_description(const char *description,yhsHandler *handler)
 {
-	FREE(handler->description);
+	char *new_description=yhs_strdup(description);
+	
+	if(new_description)
+	{
+		FREE(handler->description);
 
-	handler->description=strdup(description);
+		handler->description=new_description;
+	}
 
 	return handler;
 }

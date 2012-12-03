@@ -27,7 +27,9 @@ static void dump(const void *p_a,size_t n,const char *prefix)
 {
 	const unsigned char *p=(const unsigned char *)p_a;
 
-	for(size_t i=0;i<n;i+=16)
+	size_t n2=n==0?1:n;
+
+	for(size_t i=0;i<n2;i+=16)
 	{
 		printf("%s%08X: ",prefix,i);
 

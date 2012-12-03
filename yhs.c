@@ -217,16 +217,16 @@ struct yhsHandler
 
 struct PNGWriteState
 {
-    // Dimensions of image and bytes/pixel
+    // Dimensions of image and bytes/pixel.
     int w,h,bypp;
     
-    // Coords of next pixel to be written
+    // Coords of next pixel to be written.
     int x,y;
     
-    // Chunk CRC so far
+    // Chunk CRC so far.
     uint32_t chunk_crc;
     
-    // Adler sums for the Zlib encoding
+    // Adler sums for the Zlib encoding.
     uint32_t adler32_s1,adler32_s2;
 };
 typedef struct PNGWriteState PNGWriteState;
@@ -243,11 +243,21 @@ enum yhsResponseFlags
 enum yhsResponseType
 {
     RT_NONE_SET,
-    RT_TEXT,
-    RT_IMAGE,
     RT_DEFER,
+
+	// TEXT and IMAGE are distinguished for asserting purposes. 
+	RT_TEXT,
+	RT_IMAGE,
 };
 typedef enum yhsResponseType yhsResponseType;
+
+enum yhsResponseState
+{
+	RS_NONE,
+	RS_HEADER,
+	RS_DATA,
+};
+typedef enum yhsResponseState yhsResponseState;
 
 struct KeyValuePair
 {
@@ -268,6 +278,7 @@ struct yhsRequest
     
     SOCKET sock;
     yhsResponseType type;
+	yhsResponseState state;
 
 	// pngstuff
     PNGWriteState png;
@@ -987,7 +998,42 @@ static int find_handler_for_res_path(yhsServer *server,yhsResPathHandlerFn *hand
     return 0;
 }
 
-static void flush_write_buf(yhsRequest *re);
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+// send data to client, with some buffering.
+
+static void flush_write_buf(yhsRequest *re)
+{
+	if(re->server->write_buf_data_size>0)
+	{
+		int n=send(re->sock,re->server->write_buf,re->server->write_buf_data_size,0);
+		if(n<0||(size_t)n!=re->server->write_buf_data_size)
+			YHS_ERR("write.");
+
+		re->server->write_buf_data_size=0;
+	}
+}
+
+static void send_byte(yhsRequest *re,uint8_t value)
+{
+	assert(re->server->write_buf_data_size<sizeof re->server->write_buf);
+	re->server->write_buf[re->server->write_buf_data_size++]=value;
+
+	if(re->server->write_buf_data_size==sizeof re->server->write_buf)
+		flush_write_buf(re);
+}
+
+static void send_string(yhsRequest *re,const char *str)
+{
+	const char *c;
+
+	for(c=str;*c!=0;++c)
+		send_byte(re,*c);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
 
 static void reset_request(yhsRequest *re)
 {
@@ -1014,26 +1060,33 @@ static void finish_response(yhsRequest *re)
 	reset_request(re);
 }
 
-static void header(yhsRequest *re,yhsResponseType type,const char *status,const char *key0,...)
+static void header(yhsRequest *re,yhsResponseType type,const char *status)
 {
-	const char *key;
-	va_list v;
-	
 	assert(re->type==RT_NONE_SET);
+	assert(re->state==RS_NONE);
+
 	re->type=type;
-	
-	yhs_textf(re,"HTTP/1.1 %s\r\n",status);
-	
-	va_start(v,key0);
-	for(key=key0;key;key=va_arg(v,const char *))
+
+	send_string(re,"HTTP/1.1 ");
+	send_string(re,status);
+	send_string(re,"\r\n");
+
+	re->state=RS_HEADER;
+}
+
+static void send_response_byte(yhsRequest *re,uint8_t value)
+{
+	assert(re->state==RS_HEADER||re->state==RS_DATA);
+
+	// If still sending the header, finish it off.
+	if(re->state==RS_HEADER)
 	{
-		const char *value=va_arg(v,const char *);
-		
-		if(key&&value)
-			yhs_textf(re,"%s: %s\r\n",key,value);
+		send_string(re,"\r\n");
+
+		re->state=RS_DATA;
 	}
-	
-	yhs_textf(re,"\r\n");
+
+	send_byte(re,value);
 }
 
 static void debug_dump_string(const char *str,int max_len)
@@ -1230,23 +1283,12 @@ int yhs_update(yhsServer *server)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-static void flush_write_buf(yhsRequest *re)
-{
-    if(re->server->write_buf_data_size>0)
-    {
-        int n=send(re->sock,re->server->write_buf,re->server->write_buf_data_size,0);
-        if(n<0||(size_t)n!=re->server->write_buf_data_size)
-            YHS_ERR("write.");
-        
-        re->server->write_buf_data_size=0;
-    }
-}
-
 void yhs_data_response(yhsRequest *re,const char *type)
 {
     assert(re->type==RT_NONE_SET);
 	
-	header(re,RT_TEXT,"200 OK","Content-Type",type,(char *)0);
+	header(re,RT_TEXT,"200 OK");//,"Content-Type",type,(char *)0);
+	yhs_header_field(re,"Content-Type",type);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1267,14 +1309,15 @@ void yhs_textv(yhsRequest *re,const char *fmt,va_list v)
     vsnprintf(text,sizeof text,fmt,v);
 	text[sizeof text-1]=0;
     
-	// not amazing, as yhs_text calls strlen, even though
-	// vsnprintf will usually return the right value. 
     yhs_text(re,text);
 }
 
 void yhs_text(yhsRequest *re,const char *text)
 {
-	yhs_data(re,text,strlen(text));
+	const char *c;
+
+	for(c=text;*c!=0;++c)
+		send_response_byte(re,*c);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1341,22 +1384,16 @@ void yhs_html_text(yhsRequest *re,unsigned escape_flags,const char *text)
 	}
 }
 
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 void yhs_data(yhsRequest *re,const void *data,size_t data_size)
 {
-    size_t i;
-    const uint8_t *p=(const uint8_t *)data;
-    
-//	// assume it's all going to be OK, if it's got this far and
-//	// the status has yet to be sent.
-//	maybe_send_status_code(re,"200 OK");
-	
-    for(i=0;i<data_size;++i)
-    {
-        re->server->write_buf[re->server->write_buf_data_size++]=p[i];
-        
-        if(re->server->write_buf_data_size==sizeof re->server->write_buf)
-            flush_write_buf(re);
-    }
+	size_t i;
+	const uint8_t *p=(const uint8_t *)data;
+
+	for(i=0;i<data_size;++i)
+		send_response_byte(re,p[i]);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1428,7 +1465,10 @@ void yhs_image_response(yhsRequest *re,int width,int height,int ncomp)
     assert(ncomp==3||ncomp==4);
     assert(re->type==RT_NONE_SET);
 	
-	header(re,RT_IMAGE,"200 OK","Content-Type","image/png",(char *)0);
+	header(re,RT_IMAGE,"200 OK");
+	yhs_header_field(re,"Content-Type","image/png");
+
+	memset(&re->png,0,sizeof re->png);
     
     re->png.w=width;
     re->png.h=height;
@@ -1443,38 +1483,40 @@ void yhs_image_response(yhsRequest *re,int width,int height,int ncomp)
         re->png.bypp=4;
     else
         re->png.bypp=3;
-    
-//    yhs_text(re,"Content-Type: image/png\r\n\r\n");
-    
-    yhs_data(re,png_sig,8);
-    
-    // Obligatory IHDR chunk
-    start_png_chunk(re,4+4+1+1+1+1+1,"IHDR");
-    png32(re,re->png.w);
-    png32(re,re->png.h);
-    png8(re,8);//bits per sample
-    
-    if(re->png.bypp==4)
-        png8(re,6);//colour type (6=RGBA)
-    else
-        png8(re,2);//colour type (2=RGB)
-    
-    png8(re,0);//compression type (0=deflate)
-    png8(re,0);//filter type (0=standard set)
-    png8(re,0);//interlace type (0=none)
-    end_png_chunk(re);
-    
-    // IDAT chunk with ZLIB header
-    start_png_chunk(re,2,"IDAT");
-    png8(re,0x78);//default, 32K window (not that it matters)
-    png8(re,1);//compressor used fastest algorithm; no dictionary; +1 for FCHECK.
-    end_png_chunk(re);
 }
 
 void yhs_pixel(yhsRequest *re,int r,int g,int b,int a)
 {
     assert(re->type==RT_IMAGE);
     assert(re->png.y<re->png.h);
+
+	if(re->png.x==0&&re->png.y==0)
+	{
+		// Send PNG header.
+		yhs_data(re,png_sig,8);
+
+		// Obligatory IHDR chunk
+		start_png_chunk(re,4+4+1+1+1+1+1,"IHDR");
+		png32(re,re->png.w);
+		png32(re,re->png.h);
+		png8(re,8);//bits per sample
+
+		if(re->png.bypp==4)
+			png8(re,6);//colour type (6=RGBA)
+		else
+			png8(re,2);//colour type (2=RGB)
+
+		png8(re,0);//compression type (0=deflate)
+		png8(re,0);//filter type (0=standard set)
+		png8(re,0);//interlace type (0=none)
+		end_png_chunk(re);
+
+		// IDAT chunk with ZLIB header
+		start_png_chunk(re,2,"IDAT");
+		png8(re,0x78);//default, 32K window (not that it matters)
+		png8(re,1);//compressor used fastest algorithm; no dictionary; +1 for FCHECK.
+		end_png_chunk(re);
+	}
     
     if(re->png.x==0)
     {
@@ -1540,7 +1582,8 @@ void yhs_pixel(yhsRequest *re,int r,int g,int b,int a)
 
 void yhs_error_response(yhsRequest *re,const char *status_line)
 {
-	header(re,RT_TEXT,status_line,"Content-Type","text/html",(char *)0);
+	header(re,RT_TEXT,status_line);
+	yhs_header_field(re,"Content-Type","text/html");
     
     yhs_textf(re,"<html>\n");
     yhs_textf(re," <head>\n");
@@ -1564,7 +1607,21 @@ void yhs_error_response(yhsRequest *re,const char *status_line)
 
 void yhs_see_other_response(yhsRequest *re,const char *destination)
 {
-	header(re,RT_TEXT,"303 See Other","Location",destination,(char *)0);
+	header(re,RT_TEXT,"303 See Other");
+	yhs_header_field(re,"Location",destination);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+void yhs_header_field(yhsRequest *re,const char *name,const char *value)
+{
+	assert(re->state==RS_HEADER);
+
+	send_string(re,name);
+	send_string(re,": ");
+	send_string(re,value);
+	send_string(re,"\r\n");
 }
 
 //////////////////////////////////////////////////////////////////////////

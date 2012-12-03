@@ -309,6 +309,31 @@ YHS_EXTERN void yhs_see_other_response(yhsRequest *req,const char *destination);
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 //
+// Response header fields
+//
+// Once a response has been started using one of the yhs_xxx_response functions,
+// before any data has been sent, further fields can be added to the header.
+//
+
+// Add a field to the response header.
+//
+// IN
+//
+// name - header field name
+//
+// value - header field value
+//
+// NOTES
+//
+// - the data is sent verbatim, so don't send anything invalid.
+//
+// - don't set the Content-Type field; the yhs_xxx_response functions do that
+//   already.
+YHS_EXTERN void yhs_header_field(yhsRequest *req,const char *name,const char *value);
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+//
 // Deferred response
 //
 
@@ -339,20 +364,57 @@ YHS_EXTERN void yhs_end_deferred_response(yhsRequest *re);
 //
 // Getting request details
 
+// Retrieve the path the request is for.
+//
+// IN
+//
+// re - the request
+//
+// OUT
+//
+// const char * - the path
 YHS_EXTERN const char *yhs_get_path(yhsRequest *re);
 
+// Retrieve the request method.
+//
+// IN
+//
+// re - the request
+//
+// OUT
+//
+// const char * - the method.
 YHS_EXTERN const char *yhs_get_method(yhsRequest *re);
 
-// pass previous result in as `prev', and the search will start from there; pass
-// NULL, and the search will start from the first header line.
+// Find the value, if any, for a header field in the request.
 //
-// e.g.,
+// IN
+//
+// re - the request
+//
+// name - the name of the header field to search for
+//
+// last_result - result of previous search, if any, or NULL if no previous
+//               search (see below)
+//
+// OUT
+//
+// const char * - the field's value, or NULL if field not found
+//
+// NOTES
+//
+// - use last_result to find all values for a given field. (The server doesn't
+//   automatically coalesce header fields.) Pass in the result from a previous
+//   invocation of yhs_find_header_field.
+//
+//   e.g.,
 //
 // <pre>
-// char *value=0;
-// while(value=yhs_find_header_field(re,"Key",value)) { ... }
+//   char *value=0;
+//   while(value=yhs_find_header_field(re,"Key",value));
+//       printf("%s\n",value);
 // </pre>
-YHS_EXTERN const char *yhs_find_header_field(yhsRequest *re,const char *key,const char *last_result);
+YHS_EXTERN const char *yhs_find_header_field(yhsRequest *re,const char *name,const char *last_result);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

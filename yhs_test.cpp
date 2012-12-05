@@ -23,6 +23,9 @@
 #include <stdlib.h>
 #include <vector>
 #include <algorithm>
+#include <assert.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 static const int PORT=35000;
 static bool g_quit=false;
@@ -327,17 +330,12 @@ static void WaitForKey()
 }
 #endif
 
-static bool IsPathSeparator(char c)
-{
-	return c=='/'||c=='\\';
-}
-
 struct MIMEType
 {
 	const char *ext,*type;
 };
 
-static const MIMEType g_mime_types[]={
+static MIMEType g_mime_types[]={
 	{"123","application/vnd.lotus-1-2-3"},{"3dml","text/vnd.in3d.3dml"},{"3ds","image/x-3ds"},{"3g2","video/3gpp2"},
 	{"3gp","video/3gpp"},{"7z","application/x-7z-compressed"},{"aab","application/x-authorware-bin"},{"aac","audio/x-aac"},
 	{"aam","application/x-authorware-map"},{"aas","application/x-authorware-seg"},{"abw","application/x-abiword"},
@@ -680,6 +678,7 @@ static const MIMEType g_mime_types[]={
 	{"z8","application/x-zmachine"},{"zaz","application/vnd.zzazz.deck+xml"},{"zip","application/zip"},
 	{"zir","application/vnd.zul"},{"zirz","application/vnd.zul"},{"zmm","application/vnd.handheld-entertainment+xml"},
 };
+static int g_mime_types_sorted=0;
 
 static int MIMETypesCompare(const void *a_a,const void *b_a)
 {
@@ -692,12 +691,171 @@ static int MIMETypesCompare(const void *a_a,const void *b_a)
 static const char *FindMIMETypeByExtension(const char *ext)
 {
 	MIMEType key={ext,0};
-	MIMEType *m=(MIMEType *)bsearch(&key,g_mime_types,sizeof g_mime_types/sizeof g_mime_types[0],sizeof g_mime_types[0],&MIMETypesCompare);
+	MIMEType *m;
+	
+	if(!g_mime_types_sorted)
+	{
+		qsort(g_mime_types,sizeof g_mime_types/sizeof g_mime_types[0],sizeof g_mime_types[0],&MIMETypesCompare);
+
+		g_mime_types_sorted=1;
+	}
+
+	m=(MIMEType *)bsearch(&key,g_mime_types,sizeof g_mime_types/sizeof g_mime_types[0],sizeof g_mime_types[0],&MIMETypesCompare);
 
 	if(!m)
 		return 0;
 
 	return m->type;
+}
+
+enum
+{
+	MAX_PATH_SIZE=1000,
+};
+
+static bool is_path_separator(char c)
+{
+	return c=='/'||c=='\\';
+}
+
+static const char *find_path_extension(const char *path)
+{
+	for(const char *e=path+strlen(path);e>=path&&!is_path_separator(*e);--e)
+	{
+		if(*e=='.')
+			return e+1;
+	}
+
+	return 0;
+}
+
+static int is_folder_path(const char *path)
+{
+	size_t n=strlen(path);
+
+	if(n>0)
+	{
+		if(is_path_separator(path[n-1]))
+			return 1;
+	}
+
+	return 0;
+}
+
+static int join_paths(char *dest,const char *a,const char *b)
+{
+	if(!a&&!b)
+		strcpy(dest,"");
+	else if((a&&!b)||(b&&!a))
+	{
+		const char *src=a?a:b;
+
+		if(strlen(src)>=MAX_PATH_SIZE)
+			return 0;
+
+		strcpy(dest,src);
+	}
+	else
+	{
+		if(is_path_separator(b[0]))
+		{
+			if(strlen(b)>=MAX_PATH_SIZE)
+				return 0;
+
+			strcpy(dest,b);
+		}
+		else
+		{
+			int sep_len=0;
+			if(!is_folder_path(a))
+				sep_len=1;
+
+			if(strlen(a)+sep_len+strlen(b)>=MAX_PATH_SIZE)
+				return 0;
+
+			strcpy(dest,a);
+
+			if(sep_len>0)
+				strcat(dest,"/");
+
+			strcat(dest,b);
+		}
+	}
+
+	return 1;
+}
+
+// TODO: actually, opera does this bit for you! is this opera-specific, or is
+// this foolish me for not checking first?
+//
+// - replace '\\' with '/'
+//
+// - remove ".." and "." appropriately
+static int normalize_path(char *dest,const char *src)
+{
+	size_t num_to_skip=0;
+
+	size_t dest_idx=0;
+	
+	int e=strlen(src);
+
+	while(e>=0)
+	{
+		int b=e;
+		while(b>0&&!is_path_separator(src[b-1]))
+			--b;
+
+		if(e-b==2&&src[b]=='.'&&src[b+1]=='.')
+		{
+			++num_to_skip;
+		}
+		else if(e-b==1&&src[b]=='.')
+		{
+			// skip...
+		}
+		else
+		{
+			if(num_to_skip>0)
+				--num_to_skip;
+			else
+			{
+				if(is_path_separator(src[e]))
+					dest[dest_idx++]='/';
+
+				for(int i=0;i<e-b;++i)
+					dest[dest_idx++]=src[e-1-i];
+			}
+		}
+
+		e=b-1;
+	}
+
+	if(num_to_skip>0)
+	{
+		// excess ".."s.
+		return 0;
+	}
+
+	dest[dest_idx++]=0;
+
+	_strrev(dest);
+
+	return 1;
+}
+
+static void test_normalize_path(const char *path,const char *expected)
+{
+	char *npath=(char *)_alloca(strlen(path)+1);
+	
+	int result=normalize_path(npath,path);
+
+	if(!expected)
+		assert(!result);
+	else
+	{
+		assert(result);
+		assert(strcmp(npath,expected)==0);
+	}
 }
 
 static void HandleFiles(yhsRequest *re)
@@ -706,67 +864,72 @@ static void HandleFiles(yhsRequest *re)
 	{
 		const char *root=(char *)yhs_get_handler_context(re);
 
-		const char *rel=yhs_get_path_handler_relative(re);
-		if(rel[0]==0)
-			rel="/";
+		char rel_path[MAX_PATH_SIZE];
+		if(!normalize_path(rel_path,yhs_get_path_handler_relative(re)))
+			return;
 
-		std::string path=root;
+		char local_path[MAX_PATH_SIZE];
+		if(!join_paths(local_path,root,rel_path))
+			return;
 
-		if(!path.empty()&&IsPathSeparator(path[path.size()-1]))
-			path.erase(path.size()-1);
-
-		if(!IsPathSeparator(rel[0]))
-			path+="/";
-
-		path+=rel;
-
-		bool isdir=false;
-		if(!path.empty()&&IsPathSeparator(path[path.size()-1]))
-			isdir=true;
-
-		if(isdir)
+		if(is_folder_path(local_path))
 		{
-			DIR *d=opendir(path.c_str());
+			DIR *d=opendir(local_path);
 
 			yhs_data_response(re,"text/html");
 
-			yhs_html_textf(re,YHS_HEF_OFF,"<html><head><title>\x1by%s\x1bn</title></head><body>",path.c_str());
+			yhs_html_textf(re,YHS_HEF_OFF,"<html><head><title>\x1by%s\x1bn</title></head><body>",rel_path);
 
 			const char *colour="#E0E0E0";
 			const char *othcolour="#FFFFFF";
 
+			yhs_html_textf(re,YHS_HEF_OFF,"<pre>");
+
 			while(struct dirent *de=readdir(d))
 			{
+				char size[100];
+				char de_local_path[MAX_PATH_SIZE];
+				struct _stat64 st;
+
 				if(de->d_name[0]=='.')
 					continue;
 
-				yhs_html_textf(re,YHS_HEF_OFF," <span style=\"background-color:%s\"><a href=\"%s\">\x1by%s\x1bn</a></span>",colour,de->d_name,de->d_name);
+				if(!join_paths(de_local_path,root,de->d_name))
+					continue;
 
-				std::swap(colour,othcolour);
+				if(_stat64(de_local_path,&st)!=0)
+					continue;
+
+				if(st.st_mode&_S_IFDIR)
+					strcpy(size,"");
+				else
+				{
+					if(st.st_size<1024*1024)
+						sprintf(size,"%.1fKB",st.st_size/1024.);
+					else if(st.st_size<1024*1024*1024)
+						sprintf(size,"%.1fMB",st.st_size/1024./1024.);
+					else
+						sprintf(size,"%.1fGB",st.st_size/1024./1024./1024.);
+				}
+
+				yhs_html_textf(re,YHS_HEF_OFF,"%-10s<a href=\"%s\">\x1by%s\x1bn</a>\n",size,de->d_name,de->d_name);
 			}
 
-			yhs_html_textf(re,YHS_HEF_OFF,"</body></html>");
+			yhs_html_textf(re,YHS_HEF_OFF,"</pre></body></html>");
 		}
 		else
 		{
-			std::string::size_type sep=path.find_last_of("\\/");
-			if(sep==std::string::npos)
-				sep=0;
-
-			std::string::size_type dot=path.find_last_of(".");
-			
-			if(dot!=std::string::npos&&dot<sep)
-				dot=std::string::npos;
+			const char *ext=find_path_extension(local_path);
 
 			const char *mime_type=0;
 
-			if(dot!=std::string::npos)
-				mime_type=FindMIMETypeByExtension(path.c_str()+dot+1);
+			if(ext)
+				mime_type=FindMIMETypeByExtension(ext);
 
 			if(!mime_type)
 				mime_type="text/plain";
 
-			FILE *f=fopen(path.c_str(),"rb");
+			FILE *f=fopen(local_path,"rb");
 			if(!f)
 				return;
 
@@ -798,6 +961,18 @@ int main()
 #ifdef _MSC_VER
 	_CrtSetDbgFlag(_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG)|_CRTDBG_LEAK_CHECK_DF|_CRTDBG_CHECK_ALWAYS_DF);
 #endif
+
+	{
+		test_normalize_path("..",0);
+		test_normalize_path(".","");
+		test_normalize_path("path1/path2","path1/path2");
+		test_normalize_path("/path1/path2","/path1/path2");
+		test_normalize_path("path1/path2/","path1/path2/");
+		test_normalize_path("/path1/path2/","/path1/path2/");
+		test_normalize_path("/path1/path2/..","/path1/");
+		test_normalize_path("/path1/path2/../..","/");
+		test_normalize_path("path1/path2/../..","");
+	}
 
 	yhs_run_unit_tests();
     

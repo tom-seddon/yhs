@@ -291,7 +291,8 @@ typedef struct KeyValuePair KeyValuePair;
 
 struct yhsRequest
 {
-	yhsRequest *next_deferred;
+//	yhsRequest *next_deferred;
+	yhsRequest *next_deferred_in_chain;
 
 	unsigned flags;
     yhsServer *server;
@@ -334,6 +335,7 @@ struct yhsServer
     // buffer for pending writes.
     char write_buf[WRITE_BUF_SIZE];
     size_t write_buf_data_size;
+	yhsRequest *write_buf_request;
 
     // server name
 	char name[MAX_SERVER_NAME_SIZE];
@@ -1027,18 +1029,30 @@ static yhsHandler *find_handler_for_res_path(yhsServer *server,const char *res_p
 
 static void flush_write_buf(yhsRequest *re)
 {
-	if(re->server->write_buf_data_size>0)
+	if(re->server->write_buf_request==re)
 	{
-		int n=send(re->sock,re->server->write_buf,re->server->write_buf_data_size,0);
-		if(n<0||(size_t)n!=re->server->write_buf_data_size)
-			YHS_ERR("write.");
+		if(re->server->write_buf_data_size>0)
+		{
+			int n=send(re->sock,re->server->write_buf,re->server->write_buf_data_size,0);
+			if(n<0||(size_t)n!=re->server->write_buf_data_size)
+				YHS_ERR("write.");
 
-		re->server->write_buf_data_size=0;
+			re->server->write_buf_data_size=0;
+			re->server->write_buf_request=0;
+		}
 	}
 }
 
 static void send_byte(yhsRequest *re,uint8_t value)
 {
+	if(re->server->write_buf_request!=re)
+	{
+		if(re->server->write_buf_request)
+			flush_write_buf(re->server->write_buf_request);
+
+		re->server->write_buf_request=re;
+	}
+
 	assert(re->server->write_buf_data_size<sizeof re->server->write_buf);
 	re->server->write_buf[re->server->write_buf_data_size++]=value;
 
@@ -1716,7 +1730,7 @@ void yhs_header_field(yhsRequest *re,const char *name,const char *value)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-yhsRequest *yhs_defer_response(yhsRequest *re)
+int yhs_defer_response(yhsRequest *re,yhsRequest **chain)
 {
 	yhsRequest *dre;
 	char *new_header_data;
@@ -1746,27 +1760,53 @@ yhsRequest *yhs_defer_response(yhsRequest *re)
 	dre->flags|=RF_OWN_HEADER_DATA;
 
 	// add to the links.
-	dre->next_deferred=dre->server->first_deferred;
-	dre->server->first_deferred=dre;
+// 	dre->next_deferred=dre->server->first_deferred;
+// 	dre->server->first_deferred=dre;
+
+	//
+	dre->next_deferred_in_chain=*chain;
+	*chain=dre;
 
 	// mark original request as deferred, so it can be discarded.
 	reset_request(re);
 	re->type=RT_DEFER;
 
-	return dre;
+	return 1;
 }
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-void yhs_end_deferred_response(yhsRequest *re)
+void yhs_next_request_ptr(yhsRequest **re_ptr)
 {
+	if(*re_ptr)
+		re_ptr=&(*re_ptr)->next_deferred_in_chain;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+void yhs_end_deferred_response(yhsRequest **re_ptr)
+{
+	yhsRequest *re=*re_ptr;
+
+	*re_ptr=re->next_deferred_in_chain;
+
 	assert(re->flags&RF_DEFERRED);
-    
-    finish_response(re);
+
+	finish_response(re);
 
 	FREE(re);
 }
+
+// void yhs_end_deferred_response(yhsRequest *re)
+// {
+// 	assert(re->flags&RF_DEFERRED);
+//     
+//     finish_response(re);
+// 
+// 	FREE(re);
+// }
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

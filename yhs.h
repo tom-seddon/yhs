@@ -352,21 +352,31 @@ YHS_EXTERN void yhs_header_field(yhsRequest *req,const char *name,const char *va
 //
 // re - the response to put off until later
 //
+// yhsRequest ** - points to pointer to first request in the chain. The new
+//                 response is added to the head.
+//
 // OUT
 //
-// yhsRequest * - pointer to a new yhsRequest, that should be used later.
-//
+// int - flag indicating success or failure - yhs_defer_response will fail if
+//       there isn't room to allocate the deferred response.
+// 
 // NOTES
 //
 // - Deferred responses use up resources until they are actually dealt with.
-YHS_EXTERN yhsRequest *yhs_defer_response(yhsRequest *re);
+//
+YHS_EXTERN int yhs_defer_response(yhsRequest *re,yhsRequest **chain);
 
-// Finish handling a deferred response.
+// Method of iteration:
 //
-// IN
-//
-// re - the yhsRequest returned from `yhs_defer_response'.
-YHS_EXTERN void yhs_end_deferred_response(yhsRequest *re);
+// yhsRequest **ptr=&whatever;//whatever was passed in to yhs_defer_response
+// while(*ptr) {
+//     if(done)
+//         yhs_end_deferred_response(ptr);
+//     else
+//         yhs_next_request_ptr(ptr);
+
+YHS_EXTERN void yhs_next_request_ptr(yhsRequest **re_ptr);
+YHS_EXTERN void yhs_end_deferred_response(yhsRequest **re_ptr);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

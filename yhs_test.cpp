@@ -270,12 +270,14 @@ struct Deferred
 
 	Deferred(unsigned when_a,yhsRequest *re,void (*fn_a)(yhsRequest *)):
 	when(when_a),
-	dre(yhs_defer_response(re)),
+	dre(0),
 	fn(fn_a)
 	{
+		yhs_defer_response(re,&this->dre);
 	}
 };
 
+static yhsRequest *g_deferred_chain;
 static std::vector<Deferred> g_deferreds;
 static unsigned g_now;
 
@@ -293,13 +295,21 @@ static void DeferImage(yhsRequest *re)
 	g_deferreds.push_back(Deferred(g_now+delay*100,re,&DeferredImage));
 }
 
+static void DeferImageChain(yhsRequest *re)
+{
+	yhs_defer_response(re,&g_deferred_chain);
+}
+
 static void DeferHTML(yhsRequest *re)
 {
     yhs_data_response(re,"text/html");
     
     yhs_text(re,"<html><head><title>Deferred Responses</title></head><body>");
     
-    yhs_text(re,"<p>1 <img src=\"1.png\"></p>");
+	yhs_text(re,"<p>c1 <img src=\"chain1.png\"></p>");
+	yhs_text(re,"<p>c2 <img src=\"chain2.png\"></p>");
+	yhs_text(re,"<p>c3 <img src=\"chain3.png\"></p>");
+    yhs_text(re,"<p>c4 <img src=\"chain4.png\"></p>");
     yhs_text(re,"<p>2 <img src=\"2.png\"></p>");
     yhs_text(re,"<p>3 <img src=\"3.png\"></p>");
     yhs_text(re,"<p>4 <img src=\"4.png\"></p>");
@@ -999,6 +1009,10 @@ int main()
     yhs_add_res_path_handler(server,"/7.png",&DeferImage,(void *)7);
     yhs_add_res_path_handler(server,"/8.png",&DeferImage,(void *)8);
     yhs_add_res_path_handler(server,"/9.png",&DeferImage,(void *)9);
+	yhs_add_res_path_handler(server,"/chain1.png",&DeferImageChain,0);
+	yhs_add_res_path_handler(server,"/chain2.png",&DeferImageChain,0);
+	yhs_add_res_path_handler(server,"/chain3.png",&DeferImageChain,0);
+	yhs_add_res_path_handler(server,"/chain4.png",&DeferImageChain,0);
     yhs_add_to_toc(yhs_add_res_path_handler(server,"/defer.html",&DeferHTML,0));
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/form.html",&HandleFormHTML,(void *)0));
     yhs_set_handler_description("form with deferred response",yhs_add_to_toc(yhs_add_res_path_handler(server,"/form.html",&HandleFormHTML,(void *)1)));
@@ -1017,6 +1031,29 @@ int main()
 #endif
         
         ++g_now;
+
+		int num_res=0;
+
+		yhsRequest **re_ptr=&g_deferred_chain;
+		while(*re_ptr)
+		{
+			yhs_image_response(*re_ptr,256,256,3);
+
+			for(int y=0;y<256;++y)
+			{
+				for(int x=0;x<256;++x)
+				{
+					yhs_pixel(*re_ptr,x,y,x^y,255);
+				}
+			}
+
+			yhs_end_deferred_response(re_ptr);
+
+			++num_res;
+		}
+
+		if(num_res>0)
+			printf("%d deferred responses in chain.\n",num_res);
         
         std::vector<Deferred>::iterator it=g_deferreds.begin();
         while(it!=g_deferreds.end())
@@ -1025,7 +1062,7 @@ int main()
             {
 				(*it->fn)(it->dre);
 
-                yhs_end_deferred_response(it->dre);
+                yhs_end_deferred_response(&it->dre);
                 
                 it=g_deferreds.erase(it);
             }

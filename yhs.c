@@ -222,6 +222,7 @@ struct yhsHandler
     struct yhsHandler *next,*prev;
 
 	unsigned flags;
+	unsigned valid_methods;
     
     char *res_path;
     size_t res_path_len;
@@ -258,6 +259,7 @@ enum yhsResponseFlags
 {
 	RF_DEFERRED=1,
 	RF_OWN_HEADER_DATA=2,
+	RF_HEAD=4,
 };
 
 enum yhsResponseType
@@ -311,6 +313,7 @@ struct yhsRequest
     char *controls_data_buffer;
 
 	// header data
+	yhsMethod method;
 	char *header_data;
 	size_t header_data_size;
 	size_t method_pos;
@@ -999,24 +1002,27 @@ static int process_request_header(char *request,size_t *method_pos,size_t *res_p
 
 // Finds most appropriate res path handler for the given res path, which may
 // refer to a file or a folder.
-static yhsHandler *find_handler_for_res_path(yhsServer *server,const char *res_path)
+static yhsHandler *find_handler_for_res_path(yhsServer *server,const char *res_path,yhsMethod method)
 {
     yhsHandler *h;
     size_t res_path_len=strlen(res_path);
     
     for(h=server->handlers.prev;h->handler_fn;h=h->prev)
     {
-        if(res_path_len>=h->res_path_len)
-        {
-            if(strncmp(h->res_path,res_path,h->res_path_len)==0)
-            {
-                if(res_path_len==h->res_path_len||
-                   (h->res_path[h->res_path_len-1]=='/'&&!strchr(res_path+h->res_path_len,'/')))
-                {
-					return h;
-                }
-            }
-        }
+		if(h->valid_methods&method)
+		{
+			if(res_path_len>=h->res_path_len)
+			{
+				if(strncmp(h->res_path,res_path,h->res_path_len)==0)
+				{
+					if(res_path_len==h->res_path_len||
+						(h->res_path[h->res_path_len-1]=='/'&&!strchr(res_path+h->res_path_len,'/')))
+					{
+						return h;
+					}
+				}
+			}
+		}
     }
 
     return 0;
@@ -1122,7 +1128,8 @@ static void send_response_byte(yhsRequest *re,uint8_t value)
 		re->state=RS_DATA;
 	}
 
-	send_byte(re,value);
+	if(re->method!=YHS_METHOD_HEAD)
+		send_byte(re,value);
 }
 
 static void debug_dump_string(const char *str,int max_len)
@@ -1195,6 +1202,7 @@ static void handle_toc(yhsRequest *re)
 static const yhsHandler toc_handler={
 	NULL,NULL,
 	0,
+	YHS_METHOD_GET|YHS_METHOD_HEAD,
 	"/",1,
 	"TOC handler",
 	&handle_toc,
@@ -1231,7 +1239,15 @@ const char *yhs_get_path_handler_relative(yhsRequest *re)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-const char *yhs_get_method(yhsRequest *re)
+yhsMethod yhs_get_method(yhsRequest *re)
+{
+	return re->method;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+const char *yhs_get_method_str(yhsRequest *re)
 {
 	const char *method=re->header_data+re->method_pos;
 	return method;
@@ -1307,7 +1323,7 @@ int yhs_update(yhsServer *server)
         yhsRequest re;
         
         // request and parts
-		const char *path;
+		const char *path,*method;
         char header_data_buf[MAX_REQUEST_SIZE+1];
         
 		reset_request(&re);
@@ -1339,11 +1355,23 @@ int yhs_update(yhsServer *server)
         }
 
 		path=yhs_get_path(&re);
+		method=yhs_get_method_str(&re);
         
-        YHS_INFO_MSG("REQUEST: Method: %s\n",yhs_get_method(&re));
+        YHS_INFO_MSG("REQUEST: Method: %s\n",method);
         YHS_INFO_MSG("         Res Path: \"%s\"\n",path);
 
-		re.handler=find_handler_for_res_path(server,path);
+		if(strcmp(method,"GET")==0)
+			re.method=YHS_METHOD_GET;
+		else if(strcmp(method,"HEAD")==0)
+			re.method=YHS_METHOD_HEAD;
+		else if(strcmp(method,"PUT")==0)
+			re.method=YHS_METHOD_PUT;
+		else if(strcmp(method,"POST")==0)
+			re.method=YHS_METHOD_POST;
+		else
+			re.method=YHS_METHOD_OTHER;
+
+		re.handler=find_handler_for_res_path(server,path,re.method);
 
         if(!re.handler)
         {
@@ -1355,6 +1383,16 @@ int yhs_update(yhsServer *server)
 				goto respond;
 			}
         }
+
+		if(re.handler)
+		{
+			YHS_INFO_MSG("         Handler: \"%s\"",re.handler->res_path);
+
+			if(re.handler->description)
+				YHS_INFO_MSG(" (%s)",re.handler->description);
+
+			YHS_INFO_MSG("\n");
+		}
         
     respond:
 		if(!response_line)
@@ -1366,7 +1404,11 @@ int yhs_update(yhsServer *server)
 		}
 		
 		if(response_line)
+		{
+			YHS_INFO_MSG("         Error response: %s\n",response_line);
+
 			yhs_error_response(&re,response_line);
+		}
 		
 		if(re.type!=RT_DEFER)
 			finish_response(&re);
@@ -1696,7 +1738,7 @@ void yhs_error_response(yhsRequest *re,const char *status_line)
     yhs_textf(re,"  <h1>%s - %s</h1>",re->server->name,status_line);
     yhs_textf(re,"  <hr>\n");
 	
-	yhs_textf(re,"  <p>HTTP Method: <tt>%s</tt></p>",yhs_get_method(re));
+	yhs_textf(re,"  <p>HTTP Method: <tt>%s</tt></p>",yhs_get_method_str(re));
 	yhs_textf(re,"  <p>Resource Path: <tt>%s</tt></p>",yhs_get_path(re));
 	
     yhs_textf(re,"  <hr>\n");
@@ -2043,8 +2085,10 @@ yhsHandler *yhs_add_res_path_handler(yhsServer *server,const char *res_path,yhsR
 	h->res_path_len=strlen(h->res_path);
     
     h->handler_fn=handler_fn;
-    
     h->context=context;
+
+	// TODO: right decision? (probably...)
+	h->valid_methods=YHS_METHOD_GET|YHS_METHOD_HEAD;
     
     for(prev=server->handlers.next;prev->handler_fn;prev=prev->next)
     {
@@ -2084,6 +2128,19 @@ yhsHandler *yhs_set_handler_description(const char *description,yhsHandler *hand
 
 		handler->description=new_description;
 	}
+
+	return handler;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+yhsHandler *yhs_set_valid_methods(unsigned valid_methods,yhsHandler *handler)
+{
+	handler->valid_methods=valid_methods;
+
+	if(handler->valid_methods&YHS_METHOD_GET)
+		handler->valid_methods|=YHS_METHOD_HEAD;
 
 	return handler;
 }

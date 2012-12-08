@@ -49,9 +49,6 @@
 // Types
 //
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
-
 struct yhsServer;
 typedef struct yhsServer yhsServer;
 
@@ -60,6 +57,22 @@ typedef struct yhsRequest yhsRequest;
 
 struct yhsHandler;
 typedef struct yhsHandler yhsHandler;
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+// HTTP methods.
+//
+// These are used both as bitflags and individual values.
+enum yhsMethod
+{
+	YHS_METHOD_GET=1,
+	YHS_METHOD_PUT=2,
+	YHS_METHOD_POST=4,
+	YHS_METHOD_OTHER=8,
+	YHS_METHOD_HEAD=16,
+};
+typedef enum yhsMethod yhsMethod;
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -166,14 +179,14 @@ YHS_EXTERN void yhs_data_response(yhsRequest *req,const char *type);
 //
 // response - the response object
 //
-// fmt,... - the usual format string thing
-// fmt,v - the usual format string thing
+// fmt,... - the usual format string thing fmt,v - the usual format string thing
 // text - text to send
 //
 // NOTES
 //
-// - Space for the expansion is limited; see the MAX_TEXT_LEN
-//   constant.
+// - Space for the expansion is limited; see the MAX_TEXT_LEN constant.
+//
+// - Response data is automatically discarded when processing a HEAD request.
 YHS_EXTERN void yhs_textf(yhsRequest *req,const char *fmt,...) YHS_PRINTF_LIKE(2,3);
 YHS_EXTERN void yhs_textv(yhsRequest *req,const char *fmt,va_list v);
 YHS_EXTERN void yhs_text(yhsRequest *req,const char *text);
@@ -205,6 +218,8 @@ YHS_EXTERN void yhs_text(yhsRequest *req,const char *text);
 //   the MAX_TEXT_LEN constant.
 //
 // - I'm not sure "html" is the best term for it.
+//
+// - Response data is automatically discarded when processing a HEAD request.
 
 enum yhsHTMLEscapeFlags
 {
@@ -274,6 +289,10 @@ YHS_EXTERN void yhs_image_response(yhsRequest *req,int width,int height,int ncom
 //
 // r,g,b,a - red, green, blue and alpha values for the pixel, each 0-255.
 //           (alpha is ignored if ncomp was 3.)
+//
+// NOTES
+//
+// - Response data is automatically discarded when processing a HEAD request.
 YHS_EXTERN void yhs_pixel(yhsRequest *respones,int r,int g,int b,int a);
 
 //////////////////////////////////////////////////////////////////////////
@@ -402,8 +421,25 @@ YHS_EXTERN const char *yhs_get_path(yhsRequest *re);
 //
 // OUT
 //
+// yhsMethod - the method. (yhsMethod has values like a bit field, but only one
+//             of the values will be returned here.)
+//
+// NOTES
+//
+// - YHS_METHOD_OTHER is returned if it wasn't one of the recognised ones (use
+//   yhs_get_method_str to see exactly what it was).
+YHS_EXTERN yhsMethod yhs_get_method(yhsRequest *re);
+
+// Retrieve the request method as a string.
+//
+// IN
+//
+// re - the request
+//
+// OUT
+//
 // const char * - the method.
-YHS_EXTERN const char *yhs_get_method(yhsRequest *re);
+YHS_EXTERN const char *yhs_get_method_str(yhsRequest *re);
 
 // Find the value, if any, for a header field in the request.
 //
@@ -608,6 +644,31 @@ YHS_EXTERN yhsHandler *yhs_add_to_toc(yhsHandler *handler);
 //
 // - `yhs_set_handler_description' allocates memory.
 YHS_EXTERN yhsHandler *yhs_set_handler_description(const char *description,yhsHandler *handler);
+
+// Set the valid methods for the given handler. The server will ignore this
+// handler when processing other methods.
+//
+// IN
+//
+// valid_methods - combination of yhsMethod values, indicating valid methods
+//
+// handler - the handler
+//
+// OUT
+//
+// yhsHandler * - the value of the handler parameter
+//
+// NOTES
+//
+// - having the object as the last parameter is kind of inconsistent, compared
+//   to everything else; it's supposed to be easier to read if multiple calls
+//   are chained.
+//
+// - if valid_methods includes YHS_METHOD_GET, YHS_METHOD_HEAD is automatically
+//   assumed.
+//
+// - the default valid methods are YHS_METHOD_GET|YHS_METHOD_HEAD.
+YHS_EXTERN yhsHandler *yhs_set_valid_methods(unsigned valid_methods,yhsHandler *handler);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

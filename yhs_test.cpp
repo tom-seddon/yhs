@@ -870,88 +870,85 @@ static void test_normalize_path(const char *path,const char *expected)
 
 static void HandleFiles(yhsRequest *re)
 {
-	if(strcmp(yhs_get_method(re),"GET")==0)
+	const char *root=(char *)yhs_get_handler_context(re);
+
+	char rel_path[MAX_PATH_SIZE];
+	if(!normalize_path(rel_path,yhs_get_path_handler_relative(re)))
+		return;
+
+	char local_path[MAX_PATH_SIZE];
+	if(!join_paths(local_path,root,rel_path))
+		return;
+
+	if(is_folder_path(local_path))
 	{
-		const char *root=(char *)yhs_get_handler_context(re);
+		DIR *d=opendir(local_path);
 
-		char rel_path[MAX_PATH_SIZE];
-		if(!normalize_path(rel_path,yhs_get_path_handler_relative(re)))
-			return;
+		yhs_data_response(re,"text/html");
 
-		char local_path[MAX_PATH_SIZE];
-		if(!join_paths(local_path,root,rel_path))
-			return;
+		yhs_html_textf(re,YHS_HEF_OFF,"<html><head><title>\x1by%s\x1bn</title></head><body>",rel_path);
 
-		if(is_folder_path(local_path))
+		const char *colour="#E0E0E0";
+		const char *othcolour="#FFFFFF";
+
+		yhs_html_textf(re,YHS_HEF_OFF,"<pre>");
+
+		while(struct dirent *de=readdir(d))
 		{
-			DIR *d=opendir(local_path);
+			char size[100];
+			char de_local_path[MAX_PATH_SIZE];
+			struct _stat64 st;
 
-			yhs_data_response(re,"text/html");
+			if(de->d_name[0]=='.')
+				continue;
 
-			yhs_html_textf(re,YHS_HEF_OFF,"<html><head><title>\x1by%s\x1bn</title></head><body>",rel_path);
+			if(!join_paths(de_local_path,root,de->d_name))
+				continue;
 
-			const char *colour="#E0E0E0";
-			const char *othcolour="#FFFFFF";
+			if(_stat64(de_local_path,&st)!=0)
+				continue;
 
-			yhs_html_textf(re,YHS_HEF_OFF,"<pre>");
-
-			while(struct dirent *de=readdir(d))
+			if(st.st_mode&_S_IFDIR)
+				strcpy(size,"");
+			else
 			{
-				char size[100];
-				char de_local_path[MAX_PATH_SIZE];
-				struct _stat64 st;
-
-				if(de->d_name[0]=='.')
-					continue;
-
-				if(!join_paths(de_local_path,root,de->d_name))
-					continue;
-
-				if(_stat64(de_local_path,&st)!=0)
-					continue;
-
-				if(st.st_mode&_S_IFDIR)
-					strcpy(size,"");
+				if(st.st_size<1024*1024)
+					sprintf(size,"%.1fKB",st.st_size/1024.);
+				else if(st.st_size<1024*1024*1024)
+					sprintf(size,"%.1fMB",st.st_size/1024./1024.);
 				else
-				{
-					if(st.st_size<1024*1024)
-						sprintf(size,"%.1fKB",st.st_size/1024.);
-					else if(st.st_size<1024*1024*1024)
-						sprintf(size,"%.1fMB",st.st_size/1024./1024.);
-					else
-						sprintf(size,"%.1fGB",st.st_size/1024./1024./1024.);
-				}
-
-				yhs_html_textf(re,YHS_HEF_OFF,"%-10s<a href=\"%s\">\x1by%s\x1bn</a>\n",size,de->d_name,de->d_name);
+					sprintf(size,"%.1fGB",st.st_size/1024./1024./1024.);
 			}
 
-			yhs_html_textf(re,YHS_HEF_OFF,"</pre></body></html>");
+			yhs_html_textf(re,YHS_HEF_OFF,"%-10s<a href=\"%s\">\x1by%s\x1bn</a>\n",size,de->d_name,de->d_name);
 		}
-		else
-		{
-			const char *ext=find_path_extension(local_path);
 
-			const char *mime_type=0;
+		yhs_html_textf(re,YHS_HEF_OFF,"</pre></body></html>");
+	}
+	else
+	{
+		const char *ext=find_path_extension(local_path);
 
-			if(ext)
-				mime_type=FindMIMETypeByExtension(ext);
+		const char *mime_type=0;
 
-			if(!mime_type)
-				mime_type="text/plain";
+		if(ext)
+			mime_type=FindMIMETypeByExtension(ext);
 
-			FILE *f=fopen(local_path,"rb");
-			if(!f)
-				return;
+		if(!mime_type)
+			mime_type="text/plain";
 
-			yhs_data_response(re,mime_type);
+		FILE *f=fopen(local_path,"rb");
+		if(!f)
+			return;
 
-			int c;
-			while((c=fgetc(f))!=EOF)
-				yhs_data_byte(re,(unsigned char)c);
+		yhs_data_response(re,mime_type);
 
-			fclose(f);
-			f=0;
-		}
+		int c;
+		while((c=fgetc(f))!=EOF)
+			yhs_data_byte(re,(unsigned char)c);
+
+		fclose(f);
+		f=0;
 	}
 }
 
@@ -1016,7 +1013,7 @@ int main()
     yhs_add_to_toc(yhs_add_res_path_handler(server,"/defer.html",&DeferHTML,0));
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/form.html",&HandleFormHTML,(void *)0));
     yhs_set_handler_description("form with deferred response",yhs_add_to_toc(yhs_add_res_path_handler(server,"/form.html",&HandleFormHTML,(void *)1)));
-    yhs_add_res_path_handler(server,"/status",&HandleStatus,0);
+    yhs_set_valid_methods(YHS_METHOD_POST,yhs_add_res_path_handler(server,"/status",&HandleStatus,0));
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/terminate",&HandleTerminate,0));
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/files/",&HandleFiles,(void *)"C:\\tom\\emacs\\elisp_html"));
 

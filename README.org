@@ -37,8 +37,8 @@ C89, C99 or C++.
 
 * Use
 
-More detailed reference docs are in the header file directly; here's a
-more conversational overview.
+This file provides a conversational overview. Please consult the
+header file as well.
 
 ** Start, update and stop server
 
@@ -74,8 +74,8 @@ particular path:
 
 : yhs_add_res_path_handler(server,"/res/",&handle_root,NULL);
 
-The argument for =context= is passed verbatim to the callback as its
-=context= parameter.
+The argument for =context= is stored and made available to the
+callback.
 
 Paths not ending in =/= are considered files, and their callback will
 be called when a request is made for that exact path.
@@ -85,70 +85,86 @@ file in that folder (at whatever depth), if there isn't a
 closer-matching folder or file handler for it.
 
 If there's no handler added for the root folder =/=, =GET= requests
-for =/= will be responded to automatically with a contents page,
-giving links to all the added paths.
+for =/= will be responded to automatically with a contents page.
 
 The server will respond to any other unhandled path with a 404 page.
 
 ** Serving things
 
-When a request is made for known path, a callback is called allowing
-you to send data back to the browser. The callback has the following
-signature:
+The handler callback has the following signature:
 
-: extern "C" typedef void (*yhsResPathHandlerFn)(yhsResponse *re,void *context,yhsResPathHandlerArgs *args);
+: extern "C" typedef void (*yhsResPathHandlerFn)(yhsRequest *re);
 
-=re= points to the (opaque) response object, =context= is the context
-pointer supplied when the callback was added (see below), and =args=
-points to a struct with any other arguments. These other arguments so
-far are =method=, the HTTP method requested (=GET=, =POST=, etc.),
-=res_path=, the path of the requested resource, and =content_type= and
-=content_length=, specifying size and format of any content that came
-along with the request.
+=re= points to the (opaque) request object. There are various
+functions to get details about the request:
 
-When your callback is called, any content is available for reading (if
-you want it), and the server is ready for your callback to provide a
+- =yhs_get_path= retrieves the specified path, and
+  =yhs_get_path_handler_relative= retrieves the part that's relative
+  to the path supplied to =yhs_add_res_path_handler=.
+
+- =yhs_get_method= and =yhs_get_method_str= retrieve the HTTP
+  method. =yhs_get_method= returns one of the values from the (not
+  exhaustive) =yhsMethod= enum, and =yhs_get_method_str= returns the
+  actual method name string.
+
+- =yhs_find_header_field= allows the request header fields to be
+  queried.
+
+You can also use =yhs_get_handler_context= and =yhs_get_handler_path=
+to retrieve the values supplied to =yhs_add_res_path_handler=.
+
+On entry to the callback, any content is available for reading (if you
+want it), and the server is ready for your callback to provide a
 response, as described below.
 
 Once you have sent the response, just return from the callback and
-appropriate action will be taken automatically.
+appropriate action will be taken automatically. If your callback
+doesn't provide any response, the server will automatically provide a
+404 page.
 
-If your callback doesn't provide any response itself, the server will
-automatically provide a 404 page.
+Respond to a =HEAD= request in exactly the same way as a =GET=
+request. The server checks for =HEAD= specially, and will discard any
+response body in that case, leaving just the headers.
 
 *** Data response
 
-Use =yhs_data_response= to start a data response, supplying MIME type
+Use =yhs_begin_data_response= to start a data response, supplying MIME type
 of data being sent:
 
-: yhs_data_response(re,"text/html");
+: yhs_begin_data_response(re,"text/html");
 
 Then use =yhs_text= (works like =printf=) to send raw text:
 
 : yhs_text(re,"<html><head><title>Hello</title></head><body><p>%d</p></body></html>",rand());
 
-Also available are =yhs_textv= (works like =vprintf=), and =yhs_text=
-(works like =fputs=).
+Also available are =yhs_textv= (works like =vprintf=), =yhs_text=
+(works like =fputs=), =yhs_data= (works a bit like =fwrite=), and
+=yhs_data_byte= (works a bit like =fputc=).
 
 If you're responding with HTML, there are a set of convenience
-functions, =yhs_html_text*=, which will add in HTML escapes and
-optionally add =<BR>= tags as appropriate.
+functions, =yhs_html_text*=, which can add in HTML escapes and
+optionally replace =\n= with =<BR>=.
 
 : yhs_html_text(re,YHS_HEF_BR,random_text);
-
-You can also use =yhs_data= (works like =fwrite=) to send raw data:
-
-: yhs_data(re,buf,buf_size);
 
 These functions perform a bit of buffering, so don't be afraid to
 write single bytes or chars.
 
+Between calling =yhs_begin_data_response= and =yhs_text= (or similar), you
+can add extra HTTP header fields to the response using
+=yhs_header_field=:
+
+: yhs_header_field(re,"X-Powered-By","C");
+
+(=yhs_begin_data_response= will already have added an appropriate
+=Content-Type= field.)
+
 *** Image response
 
-Use =yhs_image_response= to start an image response. Supply width,
+Use =yhs_begin_image_response= to start an image response. Supply width,
 height and bytes per pixel of image:
 
-: yhs_image_response(re,256,256,3);
+: yhs_begin_image_response(re,256,256,3);
 
 Then for each pixel -- and you must supply every pixel -- call
 =yhs_pixel= to specify red, green, blue and alpha:
@@ -158,83 +174,83 @@ Then for each pixel -- and you must supply every pixel -- call
 :         yhs_pixel(re,rand()&255,rand()&255,rand()&255,255);
 : }
 
+Do please note that the PNGs are not compressed.
 
-Do please note that the PNGs are not compressed...
+Between calling =yhs_begin_image_response= and =yhs_text= (or similar), you
+can add extra HTTP header fields to the response using
+=yhs_header_field=:
+
+: yhs_header_field(re,"X-Powered-By","C");
+
+(=yhs_begin_image_response= will already have added an appropriate
+=Content-Type= field.)
 
 *** Error response
 
-Call =yhs_error_response= to generate an HTTP error page, providing
-the HTTP status line (e.g., "200 OK"), and the =yhsResPathHandlerArgs=
-if you have them.
+Call =yhs_error_response= to generate an HTTP error page. Provide
+the HTTP status line, e.g., "200 OK".
 
 *** 303 See Other response
 
 Use =yhs_see_other_response= to direct the browser to =GET= a
 different URL.
 
-** Delaying responses
+** Deferred responses
 
 You may want to put off responding to a request, if it can't be
 conveniently responded to in the middle of the server update. You can
-call =yhs_defer_response= to do this, instead of calling
-=yhs_data_response= or =yhs_image_response=.
+call =yhs_defer_response= to do this.
 
-You'll need to store an object of type =yhsDeferredResponse= to hold
-some state. =yhsDeferredResponse= objects should always start out
-default-initialised:
+Requests with deferred responses are held in a list, so you can work
+through them later. You can maintain one list of all such requests, or
+have multiple lists.
 
-: yhsDeferredResponse dre={};
+Each list is represented by a =yhsRequest *=, holding a pointer to the
+head. It should start out NULL.
 
-Supply a pointer to that when you call =yhs_defer_response=:
+: yhsRequest *list=NULL;
 
-: yhs_defer_response(re,&dre);
+To defer a response, pass the request you're dealing with, and a
+pointer to the list head pointer:
 
-To actually perform the deferred response, use
-=yhs_begin_deferred_response= to get a usable =yhsResponse=:
+: yhs_defer_response(re,&list);
 
-: yhsResponse *re=yhs_begin_deferred_response(&dre);
-:
-: yhs_image_response(re,256,256,3);
-: for(int y=0;y<256;++y) {
-:     for(int x=0;x<256;++x)
-:         yhs_pixel(re,rand()&255,rand()&255,rand()&255,255);
+This allocates a copy of the current request, adds it to the list, and
+invalidates =*re=. (=yhs_defer_response= may fail and return 0, if the
+allocation fails; in that case, the list will be unchanged, and the
+server will end up producing a 404. So most of the time, you probably
+won't need to check.)
+
+Then later, work through the list and make progress with each response
+using the functions above. Then, to advance your current item pointer
+to the next request in the list, use =yhs_next_request_ptr= to leave
+the response in progress or =yhs_end_deferred_response= to finish it
+up and remove it from the list.
+
+The expected code is along these lines:
+
+: yhsRequest **cur=&list;
+: while(*cur) {
+:     /* do stuff to **cur */
+:     if(/* finished with **cur */)
+:         yhs_end_deferred_response(cur);
+:     else
+:         yhs_next_request_ptr(cur);
 : }
-
-When the response is sent, call =yhs_end_deferred_response= to perform
-the necessary cleanup:
-
-: yhs_end_deferred_response(re);
-
-*** Noting need for delayed response
-
-What you're assumed to be doing is maintaining a =yhsDeferredResponse=
-for each bit of code that might be sending a deferred response. (These
-objects are designed to be fairly small -- currently 2 pointers.) Then
-test its =server= member to see if a response has been deferred; if
-it's non-=NULL=, send the data.
-
-=yhs_begin_deferred_response= then resets the =yhsDeferredResponse=
-for you automatically, and =yhs_defer_response= asserts that the
-=yhsDeferredResponse= is already reset, under the assumption this will
-be useful to help keep things straight...
 
 ** Content
 
-If the request has content associated with it (see the =content_type=
-and =content_length= fields in the arg struct), use =yhs_get_content=
-to retrieve it.
+If the request has content associated with it (use
+=yhs_find_header_field= and look for the =Content-Type= and
+=Content-Length= fields), use =yhs_get_content= to retrieve it.
 
-Content must be retrieved immediately; if the response is deferred,
-the content becomes lost.
+You can retrieve the content all in one go, or in parts.
 
 ** Forms
 
 Helpers are provided for processing data from =POST= method forms in
 =application/x-www-form-urlencoded= format. (=GET= forms, and
 =multipart/form-data=, are not specifically catered for.)
-
-Form data must be processed immediately; if the response is deferred,
-the form data becomes lost.
 
 In the handler, use =yhs_read_form_content=:
 
@@ -245,7 +261,7 @@ In the handler, use =yhs_read_form_content=:
 : }
 
 This allocates some memory to save off the form data. This memory is
-freed automatically when the handler function finishes.
+freed automatically when the response finishes.
 
 You can (try to) retrieve a control's value by control name, using
 =yhs_find_control_value=:
@@ -261,9 +277,28 @@ You can also iterate through all the names and values available:
 :     const char *value=yhs_get_control_value(re,i);
 : }
 
-The pointers point into the data set up by =yhs_read_form_content=,
-which will be freed when the handler returns. The pointed-to data must
-be copied if it is to be kept.
+The pointers point into the data set up by =yhs_read_form_content=.
+The pointed-to data must be copied if it is to be kept past the end of
+the response.
+
+** Handler configuration
+
+After adding a handler for a path, you can configure it. 
+
+Use =yhs_add_to_toc= to add the handler to the contents page. A link
+is provided to the handler's path; by default, the text of the link is
+the path too, but you can use =yhs_set_handler_description= to provide
+something friendlier.
+
+Use =yhs_set_valid_methods= to set the valid HTTP methods for the
+path. The default valid methods are =GET= and =HEAD= only. The server
+will ignore any requests for a path using an invalid method (so that
+most handlers won't have to check the method).
+
+The configure functions return the supplied handler, so you can do
+everything on one line:
+
+: yhs_add_to_toc(yhs_set_handler_description("test handler",yhs_add_res_path_handler(server,"/test",&test_func,NULL)));
 
 * Tweakables
 
@@ -315,16 +350,7 @@ By default, debug and info messages go to =stdout=, and errors go to
 
 * TODOs
 
-- Restrict handlers by method, so you can do things like add separate
-  handlers for POSTs to and GETs from the same path.
-
 - 303 would probably be a better default response to a POST than 404.
-
-- It's silly that deferring a response eats any associated content;
-  when reading the request header, should simply do it byte by byte,
-  and stop at the end of the header, so that the response is left in
-  the socket recv buffer for later retrieval. (This would also
-  simplify the code a bit.)
 
 - Lack of file I/O is a feature rather than a bug, but a handler that
   served files from a particular folder tree would still be useful...
@@ -334,13 +360,9 @@ By default, debug and info messages go to =stdout=, and errors go to
 
 - Optional integration with miniz for gzip'd transfers
 
-- Add some function or something to reset =yhsDeferredResponse=
-  objects, because it can be a bit inconvenient to default-initialize
-  them if they're part of some larger struct.
-
-- Auto support for HEAD method?
-
 - Support "Transfer-Encoding: chunked"?
+
+- Maybe do something nicer about form content?
 
 * Other embeddable web serving options
 

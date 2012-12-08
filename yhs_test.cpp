@@ -146,7 +146,7 @@ static void dump(const void *p_a,size_t n,const char *prefix)
 
 static void HandleFolder(yhsRequest *re)
 {
-    yhs_data_response(re,"text/html");
+    yhs_begin_data_response(re,"text/html");
     
     yhs_text(re,"<html><head><title>Example Folder</title></head><body><p>Handler for folder.</p></body></html>");
 }
@@ -158,14 +158,14 @@ static void HandleRedir(yhsRequest *re)
 
 static void HandleFile(yhsRequest *re)
 {
-    yhs_data_response(re,"text/plain");
+    yhs_begin_data_response(re,"text/plain");
     
     yhs_text(re,"Handler for individual file.");
 }
 
 static void HandleImage(yhsRequest *re)
 {
-    yhs_image_response(re,512,512,3);
+    yhs_begin_image_response(re,512,512,3);
     
     for(size_t i=0;i<262144;++i)
     {
@@ -179,7 +179,7 @@ static void HandleFormHTML(yhsRequest *re)
 {
 	bool defer=!!yhs_get_handler_context(re);
     
-	yhs_data_response(re,"text/html");
+	yhs_begin_data_response(re,"text/html");
 
 	yhs_textf(re,"<html><head><title>Test form GET/POST%s</title></head>\n",defer?" (deferred)":"");
     yhs_text(re,"\n");
@@ -283,7 +283,7 @@ static unsigned g_now;
 
 static void DeferredImage(yhsRequest *re)
 {
-	yhs_image_response(re,64,64,3);
+	yhs_begin_image_response(re,64,64,3);
 	for(int i=0;i<64*64;++i)
 		yhs_pixel(re,rand()&0xFF,rand()&0xFF,rand()&0xFF,255);
 }
@@ -302,7 +302,7 @@ static void DeferImageChain(yhsRequest *re)
 
 static void DeferHTML(yhsRequest *re)
 {
-    yhs_data_response(re,"text/html");
+    yhs_begin_data_response(re,"text/html");
     
     yhs_text(re,"<html><head><title>Deferred Responses</title></head><body>");
     
@@ -884,7 +884,7 @@ static void HandleFiles(yhsRequest *re)
 	{
 		DIR *d=opendir(local_path);
 
-		yhs_data_response(re,"text/html");
+		yhs_begin_data_response(re,"text/html");
 
 		yhs_html_textf(re,YHS_HEF_OFF,"<html><head><title>\x1by%s\x1bn</title></head><body>",rel_path);
 
@@ -941,7 +941,7 @@ static void HandleFiles(yhsRequest *re)
 		if(!f)
 			return;
 
-		yhs_data_response(re,mime_type);
+		yhs_begin_data_response(re,mime_type);
 
 		int c;
 		while((c=fgetc(f))!=EOF)
@@ -1034,7 +1034,7 @@ int main()
 		yhsRequest **re_ptr=&g_deferred_chain;
 		while(*re_ptr)
 		{
-			yhs_image_response(*re_ptr,256,256,3);
+			yhs_begin_image_response(*re_ptr,256,256,3);
 
 			for(int y=0;y<256;++y)
 			{

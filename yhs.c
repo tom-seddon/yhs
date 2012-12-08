@@ -1170,7 +1170,7 @@ static void handle_toc(yhsRequest *re)
 {
 	yhsHandler *h;
 
-	yhs_data_response(re,"text/html");
+	yhs_begin_data_response(re,"text/html");
 	
 	yhs_textf(re,"<html>\n");
 	yhs_html_textf(re,YHS_HEF_OFF," <head><title>\x1by%s\x1bn - Contents</title></head>\n",re->server->name);
@@ -1420,7 +1420,7 @@ int yhs_update(yhsServer *server)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-void yhs_data_response(yhsRequest *re,const char *type)
+void yhs_begin_data_response(yhsRequest *re,const char *type)
 {
     assert(re->type==RT_NONE_SET);
 	
@@ -1605,7 +1605,7 @@ static void end_png_chunk(yhsRequest *re)
 
 static const uint8_t png_sig[]={137,80,78,71,13,10,26,10,};
 
-void yhs_image_response(yhsRequest *re,int width,int height,int ncomp)
+void yhs_begin_image_response(yhsRequest *re,int width,int height,int ncomp)
 {
     assert(ncomp==3||ncomp==4);
     assert(re->type==RT_NONE_SET);

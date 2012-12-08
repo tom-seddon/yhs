@@ -171,7 +171,7 @@ YHS_EXTERN int yhs_update(yhsServer *server);
 // response - the response object
 //
 // type - the Content-Type (e.g., "text/html")
-YHS_EXTERN void yhs_data_response(yhsRequest *req,const char *type);
+YHS_EXTERN void yhs_begin_data_response(yhsRequest *req,const char *type);
 
 // Send response text verbatim.
 //
@@ -279,7 +279,7 @@ YHS_EXTERN void yhs_data_byte(yhsRequest *req,unsigned char value);
 //
 // - `ncomp' is supposed to mirror the stb_image behaviour a bit, but it's
 //   not really very general.
-YHS_EXTERN void yhs_image_response(yhsRequest *req,int width,int height,int ncomp);
+YHS_EXTERN void yhs_begin_image_response(yhsRequest *req,int width,int height,int ncomp);
 
 // Send the next pixel in an image response.
 //

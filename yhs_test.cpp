@@ -2,6 +2,9 @@
 
 #include "yhs.h"
 
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 #ifdef WIN32
 
 // Windows
@@ -11,14 +14,29 @@
 #include <windows.h>
 #include <shlwapi.h>
 
+#define STRICMP(X,Y) (_stricmp((X),(Y)))
+#define ALLOCA(X) (_alloca(X))
+
 #endif
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
 
 #ifdef __APPLE__
 
 // Mac/iBlah
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <dirent.h>
+
+#define STRICMP(X,Y) (strcasecmp((X),(Y)))
+#define ALLOCA(X) (alloca(X))
 
 #endif
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
 
 #include <stdlib.h>
 #include <vector>
@@ -27,8 +45,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-static const int PORT=35000;
-static bool g_quit=false;
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
 
 #ifdef WIN32
 
@@ -98,6 +116,15 @@ void closedir(DIR *d)
 
 #endif
 
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static const int PORT=35000;
+static bool g_quit=false;
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 static void dump(const void *p_a,size_t n,const char *prefix)
 {
 	const unsigned char *p=(const unsigned char *)p_a;
@@ -106,7 +133,7 @@ static void dump(const void *p_a,size_t n,const char *prefix)
 
 	for(size_t i=0;i<n2;i+=16)
 	{
-		printf("%s%08X: ",prefix,i);
+		printf("%s%08X: ",prefix,(unsigned)i);
 
 		for(size_t j=0;j<16;++j)
 		{
@@ -695,7 +722,7 @@ static int MIMETypesCompare(const void *a_a,const void *b_a)
 	const MIMEType *a=(const MIMEType *)a_a;
 	const MIMEType *b=(const MIMEType *)b_a;
 
-	return _stricmp(a->ext,b->ext);
+	return STRICMP(a->ext,b->ext);
 }
 
 static const char *FindMIMETypeByExtension(const char *ext)
@@ -846,16 +873,19 @@ static int normalize_path(char *dest,const char *src)
 		return 0;
 	}
 
-	dest[dest_idx++]=0;
-
-	_strrev(dest);
+	dest[dest_idx]=0;
+	
+	size_t src_idx=0;
+	
+	while(src_idx<dest_idx)
+		std::swap(dest[src_idx++],dest[--dest_idx]);
 
 	return 1;
 }
 
 static void test_normalize_path(const char *path,const char *expected)
 {
-	char *npath=(char *)_alloca(strlen(path)+1);
+	char *npath=(char *)ALLOCA(strlen(path)+1);
 	
 	int result=normalize_path(npath,path);
 
@@ -866,6 +896,16 @@ static void test_normalize_path(const char *path,const char *expected)
 		assert(result);
 		assert(strcmp(npath,expected)==0);
 	}
+}
+
+static void GetSizeString(char *str,double n)
+{
+	if(n<1024.*1024.)
+		sprintf(str,"%.1fKB",n/1024.);
+	else if(n<1024.*1024.*1024.)
+		sprintf(str,"%.1fMB",n/1024./1024.);
+	else
+		sprintf(str,"%.1fGB",n/1024./1024./1024.);
 }
 
 static void HandleFiles(yhsRequest *re)
@@ -879,51 +919,60 @@ static void HandleFiles(yhsRequest *re)
 	char local_path[MAX_PATH_SIZE];
 	if(!join_paths(local_path,root,rel_path))
 		return;
-
+	
 	if(is_folder_path(local_path))
 	{
 		DIR *d=opendir(local_path);
 
 		yhs_begin_data_response(re,"text/html");
 
-		yhs_html_textf(re,YHS_HEF_OFF,"<html><head><title>\x1by%s\x1bn</title></head><body>",rel_path);
+		yhs_html_textf(re,YHS_HEF_OFF,"<html><head><title>Contents of \x1by%s\x1bn</title></head><body>",strlen(rel_path)==0?"/":rel_path);
 
-		const char *colour="#E0E0E0";
-		const char *othcolour="#FFFFFF";
+		unsigned num_files=0,num_folders=0;
+		double total_size=0.;
 
 		yhs_html_textf(re,YHS_HEF_OFF,"<pre>");
 
-		while(struct dirent *de=readdir(d))
+		if(d)
 		{
-			char size[100];
-			char de_local_path[MAX_PATH_SIZE];
-			struct _stat64 st;
-
-			if(de->d_name[0]=='.')
-				continue;
-
-			if(!join_paths(de_local_path,root,de->d_name))
-				continue;
-
-			if(_stat64(de_local_path,&st)!=0)
-				continue;
-
-			if(st.st_mode&_S_IFDIR)
-				strcpy(size,"");
-			else
+			while(struct dirent *de=readdir(d))
 			{
-				if(st.st_size<1024*1024)
-					sprintf(size,"%.1fKB",st.st_size/1024.);
-				else if(st.st_size<1024*1024*1024)
-					sprintf(size,"%.1fMB",st.st_size/1024./1024.);
+				char size[100];
+				char de_local_path[MAX_PATH_SIZE];
+				struct stat st;
+				
+				if(de->d_name[0]=='.')
+					continue;
+				
+				if(!join_paths(de_local_path,root,de->d_name))
+					continue;
+				
+				if(stat(de_local_path,&st)!=0)
+					continue;
+				
+				if(st.st_mode&S_IFDIR)
+				{
+					strcpy(size,"");
+					
+					++num_folders;
+				}
 				else
-					sprintf(size,"%.1fGB",st.st_size/1024./1024./1024.);
+				{
+					GetSizeString(size,st.st_size);
+					
+					total_size+=st.st_size;
+					
+					++num_files;
+				}
+				
+				yhs_html_textf(re,YHS_HEF_OFF,"%-10s<a href=\"%s\">\x1by%s\x1bn</a>\n",size,de->d_name,de->d_name);
 			}
-
-			yhs_html_textf(re,YHS_HEF_OFF,"%-10s<a href=\"%s\">\x1by%s\x1bn</a>\n",size,de->d_name,de->d_name);
 		}
+		
+		char size_str[100];
+		GetSizeString(size_str,total_size);
 
-		yhs_html_textf(re,YHS_HEF_OFF,"</pre></body></html>");
+		yhs_html_textf(re,YHS_HEF_OFF,"</pre>%s in %u file(s) and %u folder(s)</body></html>",size_str,num_files,num_folders);
 	}
 	else
 	{
@@ -980,8 +1029,14 @@ int main()
 		test_normalize_path("/path1/path2/../..","/");
 		test_normalize_path("path1/path2/../..","");
 	}
-
+	
 	yhs_run_unit_tests();
+	
+	{
+		char cwd[1000];
+		getcwd(cwd,sizeof cwd);
+		printf("Working folder: \"%s\".\n",cwd);
+	}
     
     yhsServer *server=yhs_new_server(PORT);
     

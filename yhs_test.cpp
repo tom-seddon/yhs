@@ -1015,7 +1015,7 @@ int main()
     yhs_set_handler_description("form with deferred response",yhs_add_to_toc(yhs_add_res_path_handler(server,"/form.html",&HandleFormHTML,(void *)1)));
     yhs_set_valid_methods(YHS_METHOD_POST,yhs_add_res_path_handler(server,"/status",&HandleStatus,0));
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/terminate",&HandleTerminate,0));
-	yhs_add_to_toc(yhs_add_res_path_handler(server,"/files/",&HandleFiles,(void *)"C:\\tom\\emacs\\elisp_html"));
+	yhs_add_to_toc(yhs_add_res_path_handler(server,"/files/",&HandleFiles,(void *)"./demo_files"));
 
     while(!g_quit)
     {

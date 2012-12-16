@@ -1,0 +1,6 @@
+#+OPTIONS: toc:nil num:nil author:nil email:nil creator:nil timestamp:nil ^:nil
+#+TITLE: yocto HTTP server
+
+Demo page, served from disk.
+
+[[file:pic.jpg]]

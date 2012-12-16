@@ -12,8 +12,8 @@ can use convenient stdio-style functions to send text or binary data
 to the browser, or transmit image data in PNG data.
 
 The yocto HTTP server doesn't create any threads, doesn't access the
-filing system, doesn't allocate memory all the time, and comes as only
-2 source files, for ease of integration.
+filing system by default, doesn't allocate memory all the time, and
+comes as only 2 source files, for ease of integration.
 
 The yocto HTTP server has been written for ease of embedding and ease
 of use, under the assumption that it will be used as a development and
@@ -195,6 +195,21 @@ the HTTP status line, e.g., "200 OK".
 Use =yhs_see_other_response= to direct the browser to =GET= a
 different URL.
 
+*** Serving a tree of files
+
+The server is primarily designed for serving data using the callbacks,
+but you can use the supplied =yhs_file_server_handler= handler to
+supply a tree of local files. You might use this for icons, say, or
+Javascript.
+
+When adding the file server handler, supply the local path as the
+context pointer:
+
+: yhs_add_res_path_handler(server,"/resources/",&yhs_file_server_handler,(void *)"./web_resources/");
+
+If a folder is requested rather than a file, the server will respond
+with a simple files listing page.
+
 ** Deferred responses
 
 You may want to put off responding to a request, if it can't be
@@ -352,9 +367,6 @@ By default, debug and info messages go to =stdout=, and errors go to
 
 - 303 would probably be a better default response to a POST than 404.
 
-- Lack of file I/O is a feature rather than a bug, but a handler that
-  served files from a particular folder tree would still be useful...
-
 - Optional integration with miniz or stb_image_write to serve
   compressed PNGs
 
@@ -363,6 +375,9 @@ By default, debug and info messages go to =stdout=, and errors go to
 - Support "Transfer-Encoding: chunked"?
 
 - Maybe do something nicer about form content?
+
+- Have the file server handler check for =index.html= and, if present,
+  respond with its contents rather than the files listing?
 
 * Other embeddable web serving options
 

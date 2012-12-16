@@ -673,6 +673,35 @@ YHS_EXTERN yhsHandler *yhs_set_valid_methods(unsigned valid_methods,yhsHandler *
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+// A handler that serves files in response to GET/HEAD. Supply the local
+// path on the server (e.g., "/users/fred/html/", or "C:\\temp\\web")
+// as a string as the context pointer.
+//
+// The requested path will be made relative to the resource path, and
+// that relative path appended to the local path to find the path to a
+// local resource.
+//
+// If the path is a folder, the handler will supply a basic files listing
+// in the form of an HTML page.
+//
+// If the path is a file, the handler will send the file's contents,
+// with the MIME type being inferred from the extension.
+//
+// IN
+//
+// re - the request
+//
+// NOTES
+//
+// - this is not intended to be amazingly clever, nor comprehensive, nor
+//   especially secure. You're sort of expected
+//   to only have one or two of these folders, for common resources such
+//   as PNGs or Javascript files.
+YHS_EXTERN void yhs_file_server_handler(yhsRequest *re);
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 // Run unit tests.
 //
 // The tests are performed using `assert'.

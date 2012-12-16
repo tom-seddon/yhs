@@ -2988,7 +2988,7 @@ void yhs_run_unit_tests(void)
 				CHECK(strcmp(nrm,data[i][1])==0);
 			}
 			
-			free(nrm);
+			FREE(nrm);
 			nrm=0;
 		}
 	}

@@ -28,7 +28,6 @@
 #ifdef __APPLE__
 
 #include <errno.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
@@ -37,7 +36,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
-#include <sys/stat.h>
 #include <dirent.h>
 
 #define STRICMP(X,Y) (strcasecmp((X),(Y)))
@@ -75,7 +73,10 @@ typedef unsigned __int8 uint8_t;
 typedef int socklen_t;
 
 #ifdef _MSC_VER
-#pragma warning(error:4020)//too many actual parameters
+#pragma warning(error:4020)// too many actual parameters
+#pragma warning(disable:4204)// nonstandard extension used : non-constant
+                             // aggregate initializer (think this is part of C99
+                             // now)
 #endif//_MSC_VER
 
 #define DEBUG_BREAK() (__debugbreak())
@@ -88,6 +89,8 @@ typedef int socklen_t;
 #include <ctype.h>
 #include <assert.h>
 #include <stdlib.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -210,7 +213,7 @@ static char *yhs_strdup(const char *str)
 
 	n=strlen(str)+1;
 
-	s=MALLOC(n);
+	s=(char *)MALLOC(n);
 
 	if(s)
 		memcpy(s,str,n);
@@ -2167,7 +2170,9 @@ static int is_path_separator(char c)
 
 static const char *find_path_extension(const char *path)
 {
-	for(const char *e=path+strlen(path);e>=path&&!is_path_separator(*e);--e)
+	const char *e;
+
+	for(e=path+strlen(path);e>=path&&!is_path_separator(*e);--e)
 	{
 		if(*e=='.')
 			return e+1;
@@ -2273,10 +2278,12 @@ static int normalize_path(char *dest,const char *src)
 				--num_to_skip;
 			else
 			{
+				int i;
+
 				if(is_path_separator(src[e]))
 					dest[dest_idx++]='/';
 				
-				for(int i=0;i<e-b;++i)
+				for(i=0;i<e-b;++i)
 					dest[dest_idx++]=src[e-1-i];
 			}
 		}
@@ -2296,11 +2303,13 @@ static int normalize_path(char *dest,const char *src)
 	
 	while(src_idx<dest_idx)
 	{
+		char tmp;
+
 		//std::swap(dest[src_idx++],dest[--dest_idx]);
 		
 		--dest_idx;
 		
-		char tmp=dest[dest_idx];
+		tmp=dest[dest_idx];
 		dest[dest_idx]=dest[src_idx];
 		dest[src_idx]=tmp;
 		
@@ -2328,20 +2337,24 @@ struct DIR
 	HANDLE hFind;
 	WIN32_FIND_DATAA cur_fd,next_fd;
 };
+typedef struct DIR DIR;
 
 static DIR *opendir(const char *name)
 {
-	DIR *d=new DIR;
+	char wildcard[MAX_PATH_SIZE];
+	DIR *d=(DIR *)MALLOC(sizeof *d);
+	if(!d)
+		return 0;
+
 	memset(d,0,sizeof *d);
 	
-	char wildcard[MAX_PATH];
-	PathCombineA(wildcard,name,"*");
+	join_paths(wildcard,name,"*");
 	
 	d->hFind=FindFirstFileA(wildcard,&d->next_fd);
 	
 	if(d->hFind==INVALID_HANDLE_VALUE)
 	{
-		delete d;
+		FREE(d);
 		d=0;
 	}
 	
@@ -2376,7 +2389,7 @@ static void closedir(DIR *d)
 		d->hFind=INVALID_HANDLE_VALUE;
 	}
 	
-	delete d;
+	FREE(d);
 }
 
 #endif
@@ -2789,25 +2802,25 @@ void yhs_file_server_handler(yhsRequest *re)
 	if(yhs_get_method(re)&(YHS_METHOD_GET|YHS_METHOD_HEAD))
 	{
 		const char *root=(char *)yhs_get_handler_context(re);
-		
 		char rel_path[MAX_PATH_SIZE];
+		char local_path[MAX_PATH_SIZE];
+
 		if(!normalize_path(rel_path,yhs_get_path_handler_relative(re)))
 			return;
 		
-		char local_path[MAX_PATH_SIZE];
 		if(!join_paths(local_path,root,rel_path))
 			return;
 		
 		if(is_folder_path(local_path))
 		{
+			unsigned num_files=0,num_folders=0;
+			double total_size=0.;
 			DIR *d=opendir(local_path);
+			char size_str[100];
 			
 			yhs_begin_data_response(re,"text/html");
 			
 			yhs_html_textf(re,YHS_HEF_OFF,"<html><head><title>Contents of \x1by%s\x1bn</title></head><body>",strlen(rel_path)==0?"/":rel_path);
-			
-			unsigned num_files=0,num_folders=0;
-			double total_size=0.;
 			
 			yhs_html_textf(re,YHS_HEF_OFF,"<pre>");
 			
@@ -2815,7 +2828,7 @@ void yhs_file_server_handler(yhsRequest *re)
 			{
 				struct dirent *de;
 				
-				while((de=readdir(d)))
+				while((de=readdir(d))!=0)
 				{
 					char size[100];
 					char de_local_path[MAX_PATH_SIZE];
@@ -2847,9 +2860,11 @@ void yhs_file_server_handler(yhsRequest *re)
 					
 					yhs_html_textf(re,YHS_HEF_OFF,"%-10s<a href=\"%s\">\x1by%s\x1bn</a>\n",size,de->d_name,de->d_name);
 				}
+
+				closedir(d);
+				d=0;
 			}
 			
-			char size_str[100];
 			GetSizeString(size_str,total_size);
 			
 			yhs_html_textf(re,YHS_HEF_OFF,"</pre>%s in %u file(s) and %u folder(s)</body></html>",size_str,num_files,num_folders);
@@ -2857,8 +2872,9 @@ void yhs_file_server_handler(yhsRequest *re)
 		else
 		{
 			const char *ext=find_path_extension(local_path);
-			
 			const char *mime_type=0;
+			FILE *f;
+			int c;
 			
 			if(ext)
 				mime_type=FindMIMETypeByExtension(ext);
@@ -2866,13 +2882,12 @@ void yhs_file_server_handler(yhsRequest *re)
 			if(!mime_type)
 				mime_type="text/plain";
 			
-			FILE *f=fopen(local_path,"rb");
+			f=fopen(local_path,"rb");
 			if(!f)
 				return;
 			
 			yhs_begin_data_response(re,mime_type);
 			
-			int c;
 			while((c=fgetc(f))!=EOF)
 				yhs_data_byte(re,(unsigned char)c);
 			
@@ -2955,8 +2970,9 @@ void yhs_run_unit_tests(void)
 			{"/path1/path2/../..","/",},
 			{"path1/path2/../..","",},
 		};
+		size_t i;
 		
-		for(size_t i=0;i<sizeof data/sizeof data[0];++i)
+		for(i=0;i<sizeof data/sizeof data[0];++i)
 		{
 			char *nrm=(char *)MALLOC(strlen(data[i][0])+1);
 			

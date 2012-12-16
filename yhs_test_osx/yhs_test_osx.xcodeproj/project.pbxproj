@@ -7,26 +7,15 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		106E633812DBC86E0063A7F3 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 106E633512DBC86E0063A7F3 /* main.cpp */; };
 		106E633912DBC86E0063A7F3 /* yhs.c in Sources */ = {isa = PBXBuildFile; fileRef = 106E633612DBC86E0063A7F3 /* yhs.c */; };
+		10DCE852167D60DC0052E2A9 /* yhs_test.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 10DCE851167D60DC0052E2A9 /* yhs_test.cpp */; };
 /* End PBXBuildFile section */
 
-/* Begin PBXCopyFilesBuildPhase section */
-		8DD76F690486A84900D96B5E /* CopyFiles */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 8;
-			dstPath = /usr/share/man/man1/;
-			dstSubfolderSpec = 0;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 1;
-		};
-/* End PBXCopyFilesBuildPhase section */
-
 /* Begin PBXFileReference section */
-		106E633512DBC86E0063A7F3 /* main.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = main.cpp; path = ../main.cpp; sourceTree = SOURCE_ROOT; };
 		106E633612DBC86E0063A7F3 /* yhs.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = yhs.c; path = ../yhs.c; sourceTree = SOURCE_ROOT; };
 		106E633712DBC86E0063A7F3 /* yhs.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = yhs.h; path = ../yhs.h; sourceTree = SOURCE_ROOT; };
+		10DCE851167D60DC0052E2A9 /* yhs_test.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = yhs_test.cpp; path = ../yhs_test.cpp; sourceTree = "<group>"; };
+		10DCE856167D73370052E2A9 /* demo_files */ = {isa = PBXFileReference; lastKnownFileType = folder; name = demo_files; path = ../demo_files; sourceTree = "<group>"; };
 		8DD76F6C0486A84900D96B5E /* yhs_test_osx */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = yhs_test_osx; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -44,7 +33,8 @@
 		08FB7794FE84155DC02AAC07 /* yhs_test_osx */ = {
 			isa = PBXGroup;
 			children = (
-				106E633512DBC86E0063A7F3 /* main.cpp */,
+				10DCE856167D73370052E2A9 /* demo_files */,
+				10DCE851167D60DC0052E2A9 /* yhs_test.cpp */,
 				106E633612DBC86E0063A7F3 /* yhs.c */,
 				106E633712DBC86E0063A7F3 /* yhs.h */,
 				1AB674ADFE9D54B511CA2CBB /* Products */,
@@ -69,7 +59,6 @@
 			buildPhases = (
 				8DD76F640486A84900D96B5E /* Sources */,
 				8DD76F660486A84900D96B5E /* Frameworks */,
-				8DD76F690486A84900D96B5E /* CopyFiles */,
 			);
 			buildRules = (
 			);
@@ -110,8 +99,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				106E633812DBC86E0063A7F3 /* main.cpp in Sources */,
 				106E633912DBC86E0063A7F3 /* yhs.c in Sources */,
+				10DCE852167D60DC0052E2A9 /* yhs_test.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -151,9 +140,10 @@
 				GCC_OPTIMIZATION_LEVEL = 0;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 10.6;
 				ONLY_ACTIVE_ARCH = YES;
 				PREBINDING = NO;
-				SDKROOT = macosx10.6;
+				SDKROOT = macosx;
 			};
 			name = Debug;
 		};
@@ -164,8 +154,9 @@
 				GCC_C_LANGUAGE_STANDARD = gnu99;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 10.6;
 				PREBINDING = NO;
-				SDKROOT = macosx10.6;
+				SDKROOT = macosx;
 			};
 			name = Release;
 		};

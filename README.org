@@ -380,3 +380,11 @@ http://www.gnu.org/software/libmicrohttpd/
 ** tulrich-testbed
 
 http://tu-testbed.svn.sourceforge.net/viewvc/tu-testbed/trunk/tu-testbed/net/
+
+** EasyHTTPD
+
+http://sourceforge.net/projects/ehttpd/
+
+** EHS
+
+http://ehs.fritz-elfert.de

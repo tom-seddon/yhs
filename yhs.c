@@ -61,6 +61,7 @@ typedef int SOCKET;
 #include <winsock2.h>
 #include <windows.h>
 
+typedef unsigned __int64 uint64_t;
 typedef unsigned __int32 uint32_t;
 typedef unsigned __int16 uint16_t;
 typedef unsigned __int8 uint8_t;
@@ -98,6 +99,12 @@ typedef int socklen_t;
 #ifndef NDEBUG
 
 #define ENABLE_UNIT_TESTS 1
+
+#define YHS_ASSERT(X) ((X)?(void)0:(DEBUG_BREAK(),(void)0))
+
+#else
+
+#define YHS_ASSERT(X) ((void)0)
 
 #endif//NDEBUG
 
@@ -181,9 +188,6 @@ enum
 	MAX_PATH_SIZE=1000,
 };
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
-
 // Macro wrappers for info and error messages.
 
 //#define YHS_DEBUG_MSG(...) (printf(__VA_ARGS__),(void)0)
@@ -192,9 +196,6 @@ enum
 #define YHS_INFO_MSG(...) (printf(__VA_ARGS__),(void)0)
 
 #define YHS_ERR_MSG(...) (fprintf(stderr,__VA_ARGS__),(void)0)
-
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
 
 // Memory allocation wrappers.
 
@@ -219,6 +220,124 @@ static char *yhs_strdup(const char *str)
 		memcpy(s,str,n);
 
 	return s;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+// from http://nothings.org/stb.h
+
+static void stb__sha1(const uint8_t *chunk, uint32_t h[5])
+{
+	int i;
+	uint32_t a,b,c,d,e;
+	uint32_t w[80];
+
+	for (i=0; i < 16; ++i)
+		w[i]=(chunk[i*4+0]<<24)|(chunk[i*4+1]<<16)|(chunk[i*4+2]<<8)|(chunk[i*4+3]<<0);
+
+	for (i=16; i < 80; ++i) {
+		uint32_t t;
+		t = w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16];
+		w[i] = (t + t) | (t >> 31);
+	}
+
+	a = h[0];
+	b = h[1];
+	c = h[2];
+	d = h[3];
+	e = h[4];
+
+#define STB__SHA1(k,f)                                            \
+	{                                                                 \
+	uint32_t temp = (a << 5) + (a >> 27) + (f) + e + (k) + w[i];  \
+	e = d;                                                       \
+	d = c;                                                     \
+	c = (b << 30) + (b >> 2);                               \
+	b = a;                                              \
+	a = temp;                                    \
+	}
+
+	i=0;
+	for (; i < 20; ++i) STB__SHA1(0x5a827999, d ^ (b & (c ^ d))       );
+	for (; i < 40; ++i) STB__SHA1(0x6ed9eba1, b ^ c ^ d               );
+	for (; i < 60; ++i) STB__SHA1(0x8f1bbcdc, (b & c) + (d & (b ^ c)) );
+	for (; i < 80; ++i) STB__SHA1(0xca62c1d6, b ^ c ^ d               );
+
+#undef STB__SHA1
+
+	h[0] += a;
+	h[1] += b;
+	h[2] += c;
+	h[3] += d;
+	h[4] += e;
+}
+
+void sha1(uint8_t output[20], const void *buffer_a, uint32_t len)
+{
+	unsigned char final_block[128];
+	uint32_t end_start, final_len, j;
+	int i;
+	const uint8_t *buffer=(const uint8_t *)buffer_a;
+
+	uint32_t h[5];
+
+	h[0] = 0x67452301;
+	h[1] = 0xefcdab89;
+	h[2] = 0x98badcfe;
+	h[3] = 0x10325476;
+	h[4] = 0xc3d2e1f0;
+
+	// we need to write padding to the last one or two
+	// blocks, so build those first into 'final_block'
+
+	// we have to write one special byte, plus the 8-byte length
+
+	// compute the block where the data runs out
+	end_start = len & ~63;
+
+	// compute the earliest we can encode the length
+	if (((len+9) & ~63) == end_start) {
+		// it all fits in one block, so fill a second-to-last block
+		end_start -= 64;
+	}
+
+	final_len = end_start + 128;
+
+	// now we need to copy the data in
+	assert(end_start + 128 >= len+9);
+	assert(end_start < len || len < 64-9);
+
+	j = 0;
+	if (end_start > len)
+		j = (uint32_t) - (int) end_start;
+
+	for (; end_start + j < len; ++j)
+		final_block[j] = buffer[end_start + j];
+	final_block[j++] = 0x80;
+	while (j < 128-5) // 5 byte length, so write 4 extra padding bytes
+		final_block[j++] = 0;
+	// big-endian size
+	final_block[j++] = (uint8_t)(len >> 29);
+	final_block[j++] = (uint8_t)(len >> 21);
+	final_block[j++] = (uint8_t)(len >> 13);
+	final_block[j++] = (uint8_t)(len >>  5);
+	final_block[j++] = (uint8_t)(len <<  3);
+	assert(j == 128 && end_start + j == final_len);
+
+	for (j=0; j < final_len; j += 64) { // 512-bit chunks
+		if (j+64 >= end_start+64)
+			stb__sha1(&final_block[j - end_start], h);
+		else
+			stb__sha1(&buffer[j], h);
+	}
+
+	for (i=0; i < 5; ++i) {
+		output[i*4 + 0] = (uint8_t)(h[i] >> 24);
+		output[i*4 + 1] = (uint8_t)(h[i] >> 16);
+		output[i*4 + 2] = (uint8_t)(h[i] >>  8);
+		output[i*4 + 3] = (uint8_t)(h[i] >>  0);
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -282,8 +401,15 @@ enum yhsResponseType
 	// TEXT and IMAGE are distinguished for asserting purposes. 
 	RT_TEXT,
 	RT_IMAGE,
+
+	RT_WEBSOCKET,
 };
 typedef enum yhsResponseType yhsResponseType;
+
+enum {
+	SEC_WEBSOCKET_KEY_LEN=22,
+	SEC_WEBSOCKET_ACCEPT_LEN=28,
+};
 
 enum yhsResponseState
 {
@@ -305,7 +431,7 @@ typedef struct KeyValuePair KeyValuePair;
 
 struct yhsRequest
 {
-//	yhsRequest *next_deferred;
+	yhsRequest *next_deferred,*prev_deferred;
 	yhsRequest *next_deferred_in_chain;
 
 	unsigned flags;
@@ -323,6 +449,9 @@ struct yhsRequest
     size_t num_controls;
     KeyValuePair *controls;
     char *controls_data_buffer;
+
+	// websocket
+	char websocket_accept[SEC_WEBSOCKET_ACCEPT_LEN+1];
 
 	// header data
 	yhsMethod method;
@@ -1089,6 +1218,85 @@ static void send_string(yhsRequest *re,const char *str)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+enum WebSocketFrameType
+{
+	WSFT_CONTINUATION=0,
+	WSFT_TEXT=1,
+	WSFT_BINARY=2,
+	WSFT_CLOSE=8,
+	WSFT_PING=9,
+	WSFT_PONG=10,
+};
+typedef enum WebSocketFrameType WebSocketFrameType;
+
+// TODO: pah... looks like the layers are in a twist here :(
+static void send_response_byte(yhsRequest *re,uint8_t value);
+
+static void send_websocket_frame(yhsRequest *re,WebSocketFrameType type,const void *data_a,size_t data_size_bytes)
+{
+	const uint8_t *data=(const uint8_t *)data_a;
+
+	assert(re->type==RT_WEBSOCKET);
+
+	// <pre>
+	//  7   6    5    4    3      0
+	//  FIN RSV1 RSV2 RSV3  OPCODE
+	// +---+----+----+----+--------+
+	// | 1 | 0  | 0  | 0  |(opcode)|
+	// +---+----+----+----+--------+
+	assert((type&~0xF)==0);
+	send_response_byte(re,(uint8_t)(0x80|type));
+
+	if(data_size_bytes<=125)
+	{
+		// <pre>
+		//  7    6      0
+		//  MASK   SIZE
+		// +----+--------+
+		// | 0  | size   |
+		// +----+--------+
+		send_response_byte(re,(uint8_t)data_size_bytes);
+	}
+	else if(data_size_bytes<=65535)
+	{
+		// <pre>
+		//  7    6   0
+		//  MASK  SIZE   15    8   7      0
+		// +----+-----+ +-------+ +-------+
+		// | 0  | 126 | | data_size_bytes |
+		// +----+-----+ +-------+ +-------+
+		send_response_byte(re,126);
+		send_response_byte(re,(uint8_t)(data_size_bytes>>8));
+		send_response_byte(re,(uint8_t)(data_size_bytes>>0));
+	}
+	else
+	{
+		// <pre>
+		//  7    6   0
+		//  MASK  SIZE   63  56   55  48   47  40   39  32   31  24   23  16   15   8   7    0
+		// +----+-----+ +------+ +------+ +------+ +------+ +------+ +------+ +------+ +------+
+		// | 0  | 127 | |                  data_size_bytes                                    |
+		// +----+-----+ +------+ +------+ +------+ +------+ +------+ +------+ +------+ +------+
+		send_response_byte(re,127);
+		send_response_byte(re,(uint8_t)((uint64_t)data_size_bytes>>56));
+		send_response_byte(re,(uint8_t)((uint64_t)data_size_bytes>>48));
+		send_response_byte(re,(uint8_t)((uint64_t)data_size_bytes>>40));
+		send_response_byte(re,(uint8_t)((uint64_t)data_size_bytes>>32));
+		send_response_byte(re,(uint8_t)((uint64_t)data_size_bytes>>24));
+		send_response_byte(re,(uint8_t)((uint64_t)data_size_bytes>>16));
+		send_response_byte(re,(uint8_t)((uint64_t)data_size_bytes>>8));
+		send_response_byte(re,(uint8_t)((uint64_t)data_size_bytes>>0));
+	}
+
+	for(size_t i=0;i<data_size_bytes;++i)
+		send_response_byte(re,data[i]);
+
+	flush_write_buf(re);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 static void reset_request(yhsRequest *re)
 {
 	memset(re,0,sizeof *re);
@@ -1098,8 +1306,16 @@ static void reset_request(yhsRequest *re)
 
 static void finish_response(yhsRequest *re)
 {
-    if(re->type==RT_IMAGE)
+	switch(re->type)
+	{
+	case RT_IMAGE:
         assert(re->png.y==re->png.h);
+		break;
+
+	case RT_WEBSOCKET:
+		send_websocket_frame(re,WSFT_CLOSE,0,0);
+		break;
+	}
     
     flush_write_buf(re);
     
@@ -1110,6 +1326,17 @@ static void finish_response(yhsRequest *re)
 
 	if(re->flags&RF_OWN_HEADER_DATA)
 		FREE(re->header_data);
+
+	if(re->prev_deferred)
+		re->prev_deferred->next_deferred=re->next_deferred;
+	else
+	{
+		assert(re->server->first_deferred==re);
+		re->server->first_deferred=re->next_deferred;
+	}
+
+	if(re->next_deferred)
+		re->next_deferred->prev_deferred=re->prev_deferred;
 
 	reset_request(re);
 }
@@ -1321,59 +1548,153 @@ const char *yhs_get_handler_path(yhsRequest *re)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-int yhs_update(yhsServer *server)
+static const char WEBSOCKET_MAGIC[]="258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+enum {
+	WEBSOCKET_MAGIC_LEN=sizeof WEBSOCKET_MAGIC-1,
+};
+
+static const char BASE64_CHARS[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+extern const char CHECK_BASE64_CHARS_SIZE[sizeof(BASE64_CHARS)-1==64];
+static const char BASE64_PAD='=';
+
+static void maybe_upgrade_to_websocket(yhsRequest *re)
 {
-    int any=0;
-    
-    if(!server)
-        return 0;
-    
-    for(;;)
-    {
-        // response gunk
-        const char *response_line=NULL;
-        yhsRequest re;
-        
-        // request and parts
+	const char *upgrade,*connection,*sec_websocket_version,*sec_websocket_key;
+	char nonce[SEC_WEBSOCKET_KEY_LEN+WEBSOCKET_MAGIC_LEN+1];
+	size_t i;
+	uint8_t hash[21];
+
+	// ``The request MUST contain an |Upgrade| header field whose value MUST
+    // include the "websocket" keyword.''
+	upgrade=yhs_find_header_field(re,"Upgrade",0);
+	if(!upgrade)
+		return;
+
+	if(STRICMP(upgrade,"websocket")!=0)
+		return;
+
+	// ``The request MUST contain a |Connection| header field whose value MUST
+    // include the "Upgrade" token.''
+	connection=yhs_find_header_field(re,"Connection",0);
+	if(!connection)
+		return;
+
+	if(STRICMP(connection,"Upgrade")!=0)
+		return;
+
+	// ``The request MUST include a header field with the name
+    // |Sec-WebSocket-Key|. The value of this header field MUST be a nonce
+    // consisting of a randomly selected 16-byte value that has been
+    // base64-encoded''
+	sec_websocket_key=yhs_find_header_field(re,"Sec-Websocket-Key",0);
+	if(!sec_websocket_key)
+		return;
+
+	if(strlen(sec_websocket_key)!=SEC_WEBSOCKET_KEY_LEN)
+		return;
+
+	if(strspn(sec_websocket_key,BASE64_CHARS)!=SEC_WEBSOCKET_KEY_LEN)
+		return;
+
+	// ``The request MUST include a header field with the name
+    // |Sec-WebSocket-Version|. The value of this header field MUST be 13.''
+	sec_websocket_version=yhs_find_header_field(re,"Sec-Websocket-Version",0);
+	if(!sec_websocket_version)
+		return;
+
+	if(strcmp(sec_websocket_version,"13")!=0)
+	{
+		// TODO: ``If this version does not match a version understood by the
+		// server, the server MUST abort the WebSocket handshake described in
+        // this section and instead send an appropriate HTTP error code (such as
+		// 426 Upgrade Required) and a |Sec-WebSocket-Version| header field
+		// indicating the version(s) the server is capable of understanding.''
+		//
+		// yhs does, at least, abort the connection. So that's something.
+		return;
+	}
+
+	// Form the accept token.
+	strcpy(nonce,sec_websocket_key);
+	strcat(nonce,WEBSOCKET_MAGIC);
+
+	sha1(hash,nonce,strlen(nonce));
+	hash[20]=0;
+
+	for(i=0;i<7;++i)
+	{
+		//  76543210 76543210 76543210
+		// +--------+--------+--------+
+		// |AAAAAABB|BBBBCCCC|CCDDDDDD|
+		// +--------+--------+--------+
+		re->websocket_accept[i*4+0]=BASE64_CHARS[hash[i*3+0]>>2];
+		re->websocket_accept[i*4+1]=BASE64_CHARS[((hash[i*3+0]<<4)|(hash[i*3+1]>>4))&63];
+		re->websocket_accept[i*4+2]=BASE64_CHARS[((hash[i*3+1]<<2)|(hash[i*3+2]>>6))&63];
+		re->websocket_accept[i*4+3]=BASE64_CHARS[hash[i*3+2]&63];
+	}
+
+	re->websocket_accept[28]=0;
+
+	re->method=YHS_METHOD_WEBSOCKET;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static int accept_new_connections(yhsServer *server)
+{
+	int any=0;
+
+	for(;;)
+	{
+		// response gunk
+		const char *response_line=NULL;
+		yhsRequest re;
+
+		// request and parts
 		const char *path,*method;
-        char header_data_buf[MAX_REQUEST_SIZE+1];
-        
+		char header_data_buf[MAX_REQUEST_SIZE+1];
+
 		reset_request(&re);
 
-        if(!accept_request(server->listen_sock,&re.sock))
-            break;
-        
-        any=1;
-        re.server=server;
+		if(!accept_request(server->listen_sock,&re.sock))
+			break;
+
+		any=1;
+		re.server=server;
 
 		re.server=server;
-        re.header_data=header_data_buf;
+		re.header_data=header_data_buf;
 
 		// read header and 0-terminate so that it ends with a single \r\n.
-        if(!read_request_header(re.sock,re.header_data,MAX_REQUEST_SIZE,&re.header_data_size))
-        {
-            response_line="500 Internal Server Error";
-            goto respond;
-        }
-        
-        YHS_DEBUG_MSG("REQUEST(RAW): %u/%u bytes:\n---8<---\n",(unsigned)re.header_data_size,(unsigned)re.header_data);
-        debug_dump_string(re.header_data,-1);
-        YHS_DEBUG_MSG("\n---8<---\n");
-        
-        if(!process_request_header(re.header_data,&re.method_pos,&re.path_pos,&re.first_field_pos))
-        {
-            response_line="400 Bad Request";
-            goto respond;
-        }
+		if(!read_request_header(re.sock,re.header_data,MAX_REQUEST_SIZE,&re.header_data_size))
+		{
+			response_line="500 Internal Server Error";
+			goto respond;
+		}
+
+		YHS_DEBUG_MSG("REQUEST(RAW): %u/%u bytes:\n---8<---\n",(unsigned)re.header_data_size,(unsigned)re.header_data);
+		debug_dump_string(re.header_data,-1);
+		YHS_DEBUG_MSG("\n---8<---\n");
+
+		if(!process_request_header(re.header_data,&re.method_pos,&re.path_pos,&re.first_field_pos))
+		{
+			response_line="400 Bad Request";
+			goto respond;
+		}
 
 		path=yhs_get_path(&re);
 		method=yhs_get_method_str(&re);
-        
-        YHS_INFO_MSG("REQUEST: Method: %s\n",method);
-        YHS_INFO_MSG("         Res Path: \"%s\"\n",path);
+
+		YHS_INFO_MSG("REQUEST: Method: %s\n",method);
+		YHS_INFO_MSG("         Res Path: \"%s\"\n",path);
 
 		if(strcmp(method,"GET")==0)
+		{
 			re.method=YHS_METHOD_GET;
+
+			maybe_upgrade_to_websocket(&re);
+		}
 		else if(strcmp(method,"HEAD")==0)
 			re.method=YHS_METHOD_HEAD;
 		else if(strcmp(method,"PUT")==0)
@@ -1385,8 +1706,8 @@ int yhs_update(yhsServer *server)
 
 		re.handler=find_handler_for_res_path(server,path,re.method);
 
-        if(!re.handler)
-        {
+		if(!re.handler)
+		{
 			if(strcmp(path,"/")==0)
 				re.handler=&toc_handler;
 			else
@@ -1394,7 +1715,7 @@ int yhs_update(yhsServer *server)
 				response_line="404 Not Found";
 				goto respond;
 			}
-        }
+		}
 
 		if(re.handler)
 		{
@@ -1405,26 +1726,72 @@ int yhs_update(yhsServer *server)
 
 			YHS_INFO_MSG("\n");
 		}
-        
-    respond:
+
+respond:
 		if(!response_line)
 		{
 			(*re.handler->handler_fn)(&re);
-		
+
 			if(re.type==RT_NONE_SET)
 				response_line="404 Not Found";
 		}
-		
+
 		if(response_line)
 		{
 			YHS_INFO_MSG("         Error response: %s\n",response_line);
 
 			yhs_error_response(&re,response_line);
 		}
-		
+
 		if(re.type!=RT_DEFER)
 			finish_response(&re);
-    }
+	}
+
+	return any;
+}
+
+static int update_websockets(yhsServer *server)
+{
+	(void)server;
+
+	// TODO: this is probably not actually the right thing.
+
+// 	yhsRequest *re;
+// 
+// 	for(re=server->first_deferred;re;re=re->next_deferred)
+// 	{
+// 		int is_data_waiting;
+// 
+// 		if(re->type!=RT_WEBSOCKET)
+// 			continue;
+// 
+// 		if(!check_socket_readability(re->sock,0,&is_data_waiting))
+// 		{
+// 			YHS_ERR("websocket - check socket readability");
+// 			continue;
+// 		}
+// 
+// 		if(!is_data_waiting)
+// 			continue;
+// 
+// 
+// 	}
+
+	return 0;
+}
+
+int yhs_update(yhsServer *server)
+{
+    int any=0;
+    
+    if(!server)
+        return 0;
+
+	if(accept_new_connections(server))
+		any=1;
+
+	if(update_websockets(server))
+		any=1;
 
     return any;
 }
@@ -1463,10 +1830,27 @@ void yhs_textv(yhsRequest *re,const char *fmt,va_list v)
 
 void yhs_text(yhsRequest *re,const char *text)
 {
-	const char *c;
+	switch(re->type)
+	{
+	default:
+		assert(0);
+		break;
 
-	for(c=text;*c!=0;++c)
-		send_response_byte(re,*c);
+	case RT_TEXT:
+		{
+			const char *c;
+
+			for(c=text;*c!=0;++c)
+				send_response_byte(re,*c);
+		}
+		break;
+
+	case RT_WEBSOCKET:
+		{
+			send_websocket_frame(re,WSFT_TEXT,text,strlen(text));
+		}
+		break;
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1497,6 +1881,8 @@ void yhs_html_text(yhsRequest *re,unsigned escape_flags,const char *text)
 	int on=!(escape_flags&YHS_HEF_OFF);
 	int esc=0;
 	const char *c;
+
+	assert(re->type==RT_TEXT);
 	
 	for(c=text;*c!=0;++c)
 	{
@@ -1538,11 +1924,28 @@ void yhs_html_text(yhsRequest *re,unsigned escape_flags,const char *text)
 
 void yhs_data(yhsRequest *re,const void *data,size_t data_size)
 {
+	switch(re->type)
+	{
+	default:
+		assert(0);
+		break;
+
+	case RT_TEXT:
+		{
 	size_t i;
 	const uint8_t *p=(const uint8_t *)data;
 
 	for(i=0;i<data_size;++i)
 		yhs_data_byte(re,p[i]);
+		}
+		break;
+
+	case RT_WEBSOCKET:
+		{
+			send_websocket_frame(re,WSFT_BINARY,data,data_size);
+		}
+		break;
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1771,6 +2174,22 @@ void yhs_see_other_response(yhsRequest *re,const char *destination)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+YHS_EXTERN void yhs_accept_websocket(yhsRequest *re,const char *protocol)
+{
+	assert(re->method==YHS_METHOD_WEBSOCKET);
+
+	header(re,RT_WEBSOCKET,"101 Switching Protocols");
+	yhs_header_field(re,"Sec-WebSocket-Accept",re->websocket_accept);
+	yhs_header_field(re,"Upgrade","websocket");
+	yhs_header_field(re,"Connection","Upgrade");
+
+	if(protocol)
+		yhs_header_field(re,"Sec-WebSocket-Protocol",protocol);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 void yhs_header_field(yhsRequest *re,const char *name,const char *value)
 {
 	assert(re->state==RS_HEADER);
@@ -1814,8 +2233,13 @@ int yhs_defer_response(yhsRequest *re,yhsRequest **chain)
 	dre->flags|=RF_OWN_HEADER_DATA;
 
 	// add to the links.
-// 	dre->next_deferred=dre->server->first_deferred;
-// 	dre->server->first_deferred=dre;
+	dre->prev_deferred=0;
+ 	dre->next_deferred=dre->server->first_deferred;
+
+	if(dre->next_deferred)
+		dre->next_deferred->prev_deferred=dre;
+
+ 	dre->server->first_deferred=dre;
 
 	//
 	dre->next_deferred_in_chain=*chain;
@@ -2784,7 +3208,7 @@ static const char *FindMIMETypeByExtension(const char *ext)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-static void GetSizeString(char *str,double n)
+static void get_size_string(char *str,double n)
 {
 	if(n<1024.*1024.)
 		sprintf(str,"%.1fKB",n/1024.);
@@ -2851,7 +3275,7 @@ void yhs_file_server_handler(yhsRequest *re)
 					}
 					else
 					{
-						GetSizeString(size,st.st_size);
+						get_size_string(size,st.st_size);
 						
 						total_size+=st.st_size;
 						
@@ -2865,7 +3289,7 @@ void yhs_file_server_handler(yhsRequest *re)
 				d=0;
 			}
 			
-			GetSizeString(size_str,total_size);
+			get_size_string(size_str,total_size);
 			
 			yhs_html_textf(re,YHS_HEF_OFF,"</pre>%s in %u file(s) and %u folder(s)</body></html>",size_str,num_files,num_folders);
 		}
@@ -2992,5 +3416,30 @@ void yhs_run_unit_tests(void)
 			nrm=0;
 		}
 	}
+
+// 	// test sha1
+// 	{
+// 		const char *data[][2]={
+// 			{"","da39a3ee5e6b4b0d3255bfef95601890afd80709"},
+// 			{"fred","31017a722665e4afce586950f42944a6d331dabf"},
+// 			{"The quick brown fox jumps over the lazy dog","2fd4e1c67a2d28fced849ee1bb76e7391b93eb12"},
+// 			{"The quick brown fox jumps over the lazy cog","de9f2c7fd25e1b3afad3e85a0bd17d9b100db4b3"},
+// 		};
+// 		size_t i;
+// 
+// 		for(i=0;i<sizeof data/sizeof data[0];++i)
+// 		{
+// 			size_t j;
+// 			uint8_t hash[20];
+// 
+// 			sha1(hash,data[i][0],strlen(data[i][0]));
+// 
+// 			char hash_str[41];
+// 			for(j=0;j<20;++j)
+// 				sprintf(hash_str+j*2,"%02x",hash[j]);
+// 
+// 			CHECK(strcmp(hash_str,data[i][1])==0);
+// 		}
+// 	}
 #endif//ENABLE_UNIT_TESTS
 }

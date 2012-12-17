@@ -66,11 +66,17 @@ typedef struct yhsHandler yhsHandler;
 // These are used both as bitflags and individual values.
 enum yhsMethod
 {
-	YHS_METHOD_GET=1,
-	YHS_METHOD_PUT=2,
-	YHS_METHOD_POST=4,
-	YHS_METHOD_OTHER=8,
+	// OTHER represents any method(s) not listed here.
+	YHS_METHOD_OTHER=1,
+
+	//
+	YHS_METHOD_GET=2,
+	YHS_METHOD_PUT=4,
+	YHS_METHOD_POST=8,
 	YHS_METHOD_HEAD=16,
+
+	// OK, sure, so "websocket" isn't really a method.
+	YHS_METHOD_WEBSOCKET=32,
 };
 typedef enum yhsMethod yhsMethod;
 
@@ -333,6 +339,11 @@ YHS_EXTERN void yhs_error_response(yhsRequest *req,const char *status_line);
 //   SHOULD contain a short hypertext note with a hyperlink to the new
 //   URI(s)." - so perhaps it should do that? But it doesn't.
 YHS_EXTERN void yhs_see_other_response(yhsRequest *req,const char *destination);
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+YHS_EXTERN void yhs_accept_websocket(yhsRequest *re,const char *protocol);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

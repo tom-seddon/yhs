@@ -419,6 +419,36 @@ enum yhsResponseState
 };
 typedef enum yhsResponseState yhsResponseState;
 
+enum WebSocketState
+{
+	WSS_NONE,
+	WSS_IDLE,
+	WSS_PRIMED,
+	WSS_RECV,
+};
+typedef enum WebSocketState WebSocketState;
+
+enum WebSocketOpcode
+{
+	WSO_CONTINUATION=0,
+	WSO_TEXT=1,
+	WSO_BINARY=2,
+	WSO_CLOSE=8,
+	WSO_PING=9,
+	WSO_PONG=10,
+};
+typedef enum WebSocketOpcode WebSocketOpcode;
+
+struct WebSocketFrameHeader
+{
+	uint8_t fin;
+	uint8_t opcode;
+	uint8_t mask;
+	uint64_t len;
+	uint32_t masking_key;
+};
+typedef struct WebSocketFrameHeader WebSocketFrameHeader;
+
 struct KeyValuePair
 {
     const char *key;
@@ -451,7 +481,10 @@ struct yhsRequest
     char *controls_data_buffer;
 
 	// websocket
-	char websocket_accept[SEC_WEBSOCKET_ACCEPT_LEN+1];
+	char ws_accept[SEC_WEBSOCKET_ACCEPT_LEN+1];
+	WebSocketState ws_state;
+	int ws_is_fragmented;
+	WebSocketFrameHeader ws_fh,ws_first_fh;
 
 	// header data
 	yhsMethod method;
@@ -489,29 +522,36 @@ struct yhsServer
 //////////////////////////////////////////////////////////////////////////
 
 #ifdef WIN32
-#define YHS_ERR(MSG) (yhs_err(__FILE__,__LINE__,WSAGetLastError(),(MSG)),(void)0)
+#define YHS_SOCKET_ERR(MSG) (yhs_socket_err(__FILE__,__FUNCTION__,__LINE__,WSAGetLastError(),(MSG)),(void)0)
 #else
-#define YHS_ERR(MSG) (yhs_err(__FILE__,__LINE__,errno,(MSG)),(void)0)
+#define YHS_SOCKET_ERR(MSG) (yhs_socket_err(__FILE__,__FUNCTION__,__LINE__,errno,(MSG)),(void)0)
 #endif
 
-static void yhs_err(const char *file,int line,int err,const char *msg)
+#define YHS_ERR(MSG) (yhs_err(__FILE__,__FUNCTION__,__LINE__,(MSG)),(void)0)
+
+static void yhs_err(const char *file,const char *function,int line,const char *msg)
 {
     YHS_ERR_MSG("YHS: Error:\n");
-    YHS_ERR_MSG("    %s(%d): %s: %s\n",file,line,__FUNCTION__,msg);
-    
+    YHS_ERR_MSG("    %s(%d): %s: %s\n",file,line,function,msg);
+}
+
+static void yhs_socket_err(const char *file,const char *function,int line,int err,const char *msg)
+{
+	yhs_err(file,function,line,msg);
+
 #ifdef WIN32
-    {
-        char msg[1000];
-        
-        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,0,err,0,msg,sizeof msg,0);
-        
-        while(strlen(msg)>=0&&isspace(msg[strlen(msg)-1]))
-            msg[strlen(msg)-1]=0;
-        
-        YHS_ERR_MSG("    %d - %s\n",err,msg);
-    }
+	{
+		char msg[1000];
+
+		FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,0,err,0,msg,sizeof msg,0);
+
+		while(strlen(msg)>=0&&isspace(msg[strlen(msg)-1]))
+			msg[strlen(msg)-1]=0;
+
+		YHS_ERR_MSG("    %d - %s\n",err,msg);
+	}
 #else
-    YHS_ERR_MSG("    %d - %s\n",err,strerror(err));
+	YHS_ERR_MSG("    %d - %s\n",err,strerror(err));
 #endif
 }
 
@@ -563,13 +603,13 @@ static SOCKET create_listen_socket(int port)
     
     if(sock<0)
     {
-        YHS_ERR("Create listen socket.");
+        YHS_SOCKET_ERR("Create listen socket.");
         goto done;
     }
     
     if(setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,(const char *)&reuse_addr,sizeof reuse_addr)<0)
     {
-        YHS_ERR("Set REUSEADDR.");
+        YHS_SOCKET_ERR("Set REUSEADDR.");
         goto done;
     }
     
@@ -584,14 +624,14 @@ static SOCKET create_listen_socket(int port)
     
     if(bind(sock,(struct sockaddr *)&listen_addr,sizeof(listen_addr))<0)
     {
-        YHS_ERR("Bind listen socket.");
+        YHS_SOCKET_ERR("Bind listen socket.");
         goto done;
     }
     
     // Listen
     if(listen(sock,LISTEN_SOCKET_BACKLOG)<0)
     {
-        YHS_ERR("Set listen socket to listen mode.");
+        YHS_SOCKET_ERR("Set listen socket to listen mode.");
         goto done;
     }
     
@@ -640,7 +680,7 @@ static void print_likely_urls(int port)
         struct ifaddrs *interfaces;
         if(getifaddrs(&interfaces)<0)
         {
-            YHS_ERR("Get network interfaces.");
+            YHS_SOCKET_ERR("Get network interfaces.");
             return;
         }
         
@@ -791,7 +831,7 @@ static int accept_request(SOCKET listen_sock,SOCKET *accepted_sock)
     // Maybe accept request?
     if(!check_socket_readability(listen_sock,0,&is_accept_waiting))
     {
-        YHS_ERR("Check listen socket readability.");
+        YHS_SOCKET_ERR("Check listen socket readability.");
         // @TODO: Should close and re-open socket if this happens.
         return 0;
     }
@@ -803,7 +843,7 @@ static int accept_request(SOCKET listen_sock,SOCKET *accepted_sock)
     *accepted_sock=accept(listen_sock,(struct sockaddr *)&client_addr,&client_addr_size);
     if(*accepted_sock<0)
     {
-        YHS_ERR("Accept incoming connection on listen socket.");
+        YHS_SOCKET_ERR("Accept incoming connection on listen socket.");
         return 0;
     }
     
@@ -824,7 +864,7 @@ static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *req
         
         if(!check_socket_readability(sock,10,&is_data_waiting))
         {
-            YHS_ERR("Check accepted socket readability.");
+            YHS_SOCKET_ERR("Check accepted socket readability.");
             break;
         }
         
@@ -832,7 +872,7 @@ static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *req
         {
             // The polling timeout is deliberately set high; if there's no
             // data waiting in that time, the client must have given up.
-            YHS_ERR("Timed out waiting for client to send request.");
+            YHS_SOCKET_ERR("Timed out waiting for client to send request.");
             break;
         }
         
@@ -848,7 +888,7 @@ static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *req
         {
             // Error, or client closed connection prematurely.
             if(n<0)
-                YHS_ERR("Read accepted socket.");
+                YHS_SOCKET_ERR("Read accepted socket.");
             
             break;
         }
@@ -1182,7 +1222,7 @@ static void flush_write_buf(yhsRequest *re)
 		{
 			int n=send(re->sock,re->server->write_buf,re->server->write_buf_data_size,0);
 			if(n<0||(size_t)n!=re->server->write_buf_data_size)
-				YHS_ERR("write.");
+				YHS_SOCKET_ERR("write.");
 
 			re->server->write_buf_data_size=0;
 			re->server->write_buf_request=0;
@@ -1218,21 +1258,10 @@ static void send_string(yhsRequest *re,const char *str)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-enum WebSocketFrameType
-{
-	WSFT_CONTINUATION=0,
-	WSFT_TEXT=1,
-	WSFT_BINARY=2,
-	WSFT_CLOSE=8,
-	WSFT_PING=9,
-	WSFT_PONG=10,
-};
-typedef enum WebSocketFrameType WebSocketFrameType;
-
 // TODO: pah... looks like the layers are in a twist here :(
 static void send_response_byte(yhsRequest *re,uint8_t value);
 
-static void send_websocket_frame(yhsRequest *re,WebSocketFrameType type,const void *data_a,size_t data_size_bytes)
+static void send_websocket_frame(yhsRequest *re,WebSocketOpcode opcode,const void *data_a,size_t data_size_bytes)
 {
 	const uint8_t *data=(const uint8_t *)data_a;
 
@@ -1244,8 +1273,8 @@ static void send_websocket_frame(yhsRequest *re,WebSocketFrameType type,const vo
 	// +---+----+----+----+--------+
 	// | 1 | 0  | 0  | 0  |(opcode)|
 	// +---+----+----+----+--------+
-	assert((type&~0xF)==0);
-	send_response_byte(re,(uint8_t)(0x80|type));
+	assert((opcode&~0xF)==0);
+	send_response_byte(re,(uint8_t)(0x80|opcode));
 
 	if(data_size_bytes<=125)
 	{
@@ -1313,7 +1342,7 @@ static void finish_response(yhsRequest *re)
 		break;
 
 	case RT_WEBSOCKET:
-		send_websocket_frame(re,WSFT_CLOSE,0,0);
+		send_websocket_frame(re,WSO_CLOSE,0,0);
 		break;
 	}
     
@@ -1627,13 +1656,13 @@ static void maybe_upgrade_to_websocket(yhsRequest *re)
 		// +--------+--------+--------+
 		// |AAAAAABB|BBBBCCCC|CCDDDDDD|
 		// +--------+--------+--------+
-		re->websocket_accept[i*4+0]=BASE64_CHARS[hash[i*3+0]>>2];
-		re->websocket_accept[i*4+1]=BASE64_CHARS[((hash[i*3+0]<<4)|(hash[i*3+1]>>4))&63];
-		re->websocket_accept[i*4+2]=BASE64_CHARS[((hash[i*3+1]<<2)|(hash[i*3+2]>>6))&63];
-		re->websocket_accept[i*4+3]=BASE64_CHARS[hash[i*3+2]&63];
+		re->ws_accept[i*4+0]=BASE64_CHARS[hash[i*3+0]>>2];
+		re->ws_accept[i*4+1]=BASE64_CHARS[((hash[i*3+0]<<4)|(hash[i*3+1]>>4))&63];
+		re->ws_accept[i*4+2]=BASE64_CHARS[((hash[i*3+1]<<2)|(hash[i*3+2]>>6))&63];
+		re->ws_accept[i*4+3]=BASE64_CHARS[hash[i*3+2]&63];
 	}
 
-	re->websocket_accept[28]=0;
+	re->ws_accept[28]=0;
 
 	re->method=YHS_METHOD_WEBSOCKET;
 }
@@ -1767,7 +1796,7 @@ static int update_websockets(yhsServer *server)
 // 
 // 		if(!check_socket_readability(re->sock,0,&is_data_waiting))
 // 		{
-// 			YHS_ERR("websocket - check socket readability");
+// 			YHS_SOCKET_ERR("websocket - check socket readability");
 // 			continue;
 // 		}
 // 
@@ -1847,7 +1876,7 @@ void yhs_text(yhsRequest *re,const char *text)
 
 	case RT_WEBSOCKET:
 		{
-			send_websocket_frame(re,WSFT_TEXT,text,strlen(text));
+			send_websocket_frame(re,WSO_TEXT,text,strlen(text));
 		}
 		break;
 	}
@@ -1942,7 +1971,7 @@ void yhs_data(yhsRequest *re,const void *data,size_t data_size)
 
 	case RT_WEBSOCKET:
 		{
-			send_websocket_frame(re,WSFT_BINARY,data,data_size);
+			send_websocket_frame(re,WSO_BINARY,data,data_size);
 		}
 		break;
 	}
@@ -2174,17 +2203,286 @@ void yhs_see_other_response(yhsRequest *re,const char *destination)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-YHS_EXTERN void yhs_accept_websocket(yhsRequest *re,const char *protocol)
+void yhs_accept_websocket(yhsRequest *re,const char *protocol)
 {
 	assert(re->method==YHS_METHOD_WEBSOCKET);
 
 	header(re,RT_WEBSOCKET,"101 Switching Protocols");
-	yhs_header_field(re,"Sec-WebSocket-Accept",re->websocket_accept);
+	yhs_header_field(re,"Sec-WebSocket-Accept",re->ws_accept);
 	yhs_header_field(re,"Upgrade","websocket");
 	yhs_header_field(re,"Connection","Upgrade");
 
 	if(protocol)
 		yhs_header_field(re,"Sec-WebSocket-Protocol",protocol);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static int recv_websocket_bytes(yhsRequest *re,void *buf,int buf_size,const char *msg)
+{
+	char *dest=(char *)buf;
+	int left=buf_size;
+
+	while(left>0)
+	{
+		int n=recv(re->sock,dest,left,0);
+		if(n==-1)
+		{
+			YHS_SOCKET_ERR(msg);
+			finish_response(re);
+			return -1;
+		}
+		else if(n==0)
+		{
+			YHS_ERR("endpoint closed web socket connection prematurely");
+			finish_response(re);
+			return 0;
+		}
+
+		dest+=n;
+		left-=n;
+	}
+
+	return buf_size;
+}
+
+static int recv_websocket_frame_header(yhsRequest *re,WebSocketFrameHeader *fh)
+{
+	int rr;
+	uint8_t header[2];
+
+	// Read the 2 header bytes.
+	rr=recv_websocket_bytes(re,header,2,"recv web socket frame header");
+	if(rr<=0)
+		return rr;
+
+	fh->opcode=header[0]&0x0F;
+	fh->fin=!!(header[0]&0x80);
+	fh->mask=!!(header[1]&0x80);
+	fh->len=header[1]&0x7F;
+
+	// (in)sanity checks
+	if((header[0]&(0x40|0x20|0x10))!=0)
+	{
+		YHS_ERR("received web socket frame with RSV1, RSV2 or RSV3 set");
+		goto bad;
+	}
+
+	if(!fh->mask)
+	{
+		// ``All frames sent from client to server have this bit set to
+		// 1.''
+		YHS_ERR("received unmasked web socket frame");
+		goto bad;
+	}
+
+	// Get payload length.
+	if(fh->len==127)
+	{
+		uint8_t buf[8];
+		rr=recv_websocket_bytes(re,buf,8,"recv web socket frame 64-bit payload length");
+		if(rr<=0)
+			return rr;
+
+		fh->len=((uint64_t)buf[0]<<56)|((uint64_t)buf[1]<<48)|((uint64_t)buf[2]<<40)|((uint64_t)buf[3]<<32)|(buf[4]<<24)|(buf[5]<<16)|(buf[6]<<8)|(buf[7]<<0);
+
+		if(fh->len>INT_MAX)
+		{
+			YHS_ERR("received unsupportedly large web socket frame");
+			goto bad;
+		}
+	}
+	else if(fh->len==126)
+	{
+		uint8_t buf[2];
+		rr=recv_websocket_bytes(re,buf,2,"recv web socket frame 16-bit payload length");
+		if(rr<=0)
+			return rr;
+
+		fh->len=(buf[1]<<8)|(buf[0]<<0);
+	}
+
+	// Read mask.
+	if(fh->mask)
+	{
+		uint8_t buf[4];
+		rr=recv_websocket_bytes(re,buf,4,"recv web socket masking key");
+		if(rr<=0)
+			return rr;
+
+		fh->masking_key=(buf[0]<<24)|(buf[1]<<16)|(buf[2]<<8)|(buf[3]<<0);
+	}
+
+	return 1;
+
+bad:
+	finish_response(re);
+	return -1;
+}
+
+int yhs_recv_websocket(yhsRequest *re,void *buf,size_t buf_size,int *fin)
+{
+	int rr;
+	char *dest;
+	int dest_size;
+
+	assert(buf_size<=INT_MAX);
+
+	dest=(char *)buf;
+	dest_size=(int)buf_size;
+
+	// loop on incoming packets.
+	for(;;)
+	{
+		switch(re->ws_state)
+		{
+		default:
+		case WSS_NONE:
+			assert(0);
+			return 0;
+
+		case WSS_IDLE:
+			{
+				rr=recv_websocket_frame_header(re,&re->ws_fh);
+				if(rr<=0)
+					return rr;
+
+				// Respond to control opcodes immediately.
+				if(re->ws_fh.opcode&8)
+				{
+					uint8_t payload[125];
+
+					// check header is valid.
+					if(!re->ws_fh.fin)
+					{
+						YHS_ERR("received fragmented web socket control frame");
+						goto bad;
+					}
+
+					if(re->ws_fh.len>125)
+					{
+						YHS_ERR("received web socket control frame with large payload");
+						goto bad;
+					}
+
+					// retrieve payload.
+					rr=recv_websocket_bytes(re,payload,(int)re->ws_fh.len,"recv web socket control frame payload");
+					if(rr<=0)
+						return rr;
+
+					// do whatever.
+					switch(re->ws_fh.opcode)
+					{
+					default:
+						YHS_ERR("received unknown web socket control frame");
+						goto bad;
+
+					case WSO_PING:
+						send_websocket_frame(re,WSO_PONG,payload,(size_t)re->ws_fh.len);
+						break;
+
+					case WSO_PONG:
+						// ignore pongs.
+						break;
+
+					case WSO_CLOSE:
+						// just close instantly in response to this.
+						finish_response(re);
+						return 0;
+					}
+				}
+				else
+				{
+					// data.
+					switch(re->ws_fh.opcode)
+					{
+					case WSO_CONTINUATION:
+						if(!re->ws_is_fragmented)
+						{
+							YHS_ERR("received unexpected continuation frame");
+							goto bad;
+						}
+
+						re->ws_state=WSS_RECV;
+						break;
+
+					case WSO_TEXT:
+					case WSO_BINARY:
+						if(re->ws_is_fragmented)
+						{
+							YHS_ERR("received data frame while processing fragmented frame");
+							goto bad;
+						}
+
+						re->ws_is_fragmented=!re->ws_fh.fin;
+						re->ws_first_fh=re->ws_fh;// TODO: this isn't very useful.
+						re->ws_state=WSS_RECV;
+						break;
+					}
+				}
+			}
+			break;
+
+		case WSS_RECV:
+			{
+				int num_to_recv;
+
+				assert(re->ws_fh.opcode==WSO_CONTINUATION||re->ws_fh.opcode==WSO_TEXT||re->ws_fh.opcode==WSO_BINARY);
+
+				// how many bytes to recv?
+				num_to_recv=(int)dest_size;
+				if(re->ws_fh.len<num_to_recv)
+					num_to_recv=(int)re->ws_fh.len;
+
+				// recv that many.
+				rr=recv_websocket_bytes(re,dest,num_to_recv,"recv web socket data frame payload");
+				if(rr<=0)
+					return rr;
+
+				// adjust frame length.
+				assert(re->ws_fh.len>=rr);
+				re->ws_fh.len-=rr;
+
+				// bump bufferstuff.
+				dest+=rr;
+
+				assert(dest_size>=rr);
+				dest_size-=rr;
+
+				// if frame is finished, set up state for the next one.
+				if(re->ws_fh.len==0)
+				{
+					re->ws_state=WSS_IDLE;
+
+					// if that was the last frame, done.
+					if(re->ws_fh.fin)
+					{
+						if(fin)
+							*fin=1;
+
+						return dest-(char *)buf;
+					}
+				}
+
+				// if buffer is full, done.
+				if(dest_size==0)
+				{
+					if(fin)
+						*fin=0;
+
+					return dest-(char *)buf;
+				}
+
+				// go round again...
+			}
+			break;
+		}
+	}
+
+bad:
+	finish_response(re);
+	return -1;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2299,7 +2597,7 @@ int yhs_get_content(yhsRequest *re,int num,char *buf)
         
         if(!check_socket_readability(re->sock,0,&is_readable))
         {
-            YHS_ERR("check socket readability.");
+            YHS_SOCKET_ERR("check socket readability.");
             return 0;
         }
         
@@ -2310,7 +2608,7 @@ int yhs_get_content(yhsRequest *re,int num,char *buf)
         
         if(r==-1)
         {
-            YHS_ERR("recv.");
+            YHS_SOCKET_ERR("recv.");
             return 0;
         }
         else if(r==0)

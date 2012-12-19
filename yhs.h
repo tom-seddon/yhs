@@ -345,6 +345,30 @@ YHS_EXTERN void yhs_see_other_response(yhsRequest *req,const char *destination);
 
 YHS_EXTERN void yhs_accept_websocket(yhsRequest *re,const char *protocol);
 
+// Receive web socket data.
+//
+// IN
+//
+// re - the response object
+//
+// buf,buf_size - pointer to and size of buffer to receive data
+//
+// fin - if non-NULL, on success (i.e., return >0), *fin will be set to true if
+//       the read finished due to reaching the end of the frame, or false
+//       otherwise.
+//
+// OUT
+//
+// int - recv-style return value. If >0, number of bytes actually read (may be
+//       less than buf_size if the frame was smaller). If ==0, connection was
+//       closed cleanly; if <0, connection was closed due to error.
+//
+// NOTES
+//
+// - if fin is NULL, it's hard to tell whether there's more data to come.
+YHS_EXTERN int yhs_recv_websocket(yhsRequest *re,void *buf,size_t buf_size,int *fin);
+
+
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 //

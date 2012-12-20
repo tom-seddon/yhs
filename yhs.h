@@ -343,7 +343,19 @@ YHS_EXTERN void yhs_see_other_response(yhsRequest *req,const char *destination);
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+// Respond by opening a websocket connection. The method must be
+// YHS_METHOD_WEBSOCKET.
+// 
+// IN
+//
+// re - the response object
+//
+// protocol - the protocol to use
+//
 YHS_EXTERN void yhs_accept_websocket(yhsRequest *re,const char *protocol);
+
+//
+YHS_EXTERN int yhs_select_websocket(yhsRequest *re,int *can_read,int *can_write);
 
 // Receive web socket data.
 //
@@ -368,14 +380,14 @@ YHS_EXTERN void yhs_accept_websocket(yhsRequest *re,const char *protocol);
 // - if fin is NULL, it's hard to tell whether there's more data to come.
 YHS_EXTERN int yhs_recv_websocket(yhsRequest *re,void *buf,size_t buf_size,int *fin);
 
-
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 //
 // Response header fields
 //
-// Once a response has been started using one of the yhs_xxx_response functions,
-// before any data has been sent, further fields can be added to the header.
+// Once a response has been started using the yhs_xxx_response or
+// yhs_accept_websocket functions, but before any data has been sent, further
+// fields can be added to the header.
 //
 
 // Add a field to the response header.

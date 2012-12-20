@@ -281,6 +281,13 @@ static void HandleTerminate(yhsRequest *re)
 	g_quit=true;
 }
 
+static void HandleWSEcho(yhsRequest *re)
+{
+	yhs_accept_websocket(re,0);
+
+	yhs_text(re,"WEBSOCKET BACK ATCHA");
+}
+
 #ifdef WIN32
 static void WaitForKey()
 {
@@ -350,6 +357,7 @@ int main()
     yhs_set_valid_methods(YHS_METHOD_POST,yhs_add_res_path_handler(server,"/status",&HandleStatus,0));
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/terminate",&HandleTerminate,0));
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/files/",&yhs_file_server_handler,(void *)"./demo_files"));
+	yhs_set_valid_methods(YHS_METHOD_WEBSOCKET,yhs_add_res_path_handler(server,"/ws_echo/",&HandleWSEcho,0));
 
     while(!g_quit)
     {

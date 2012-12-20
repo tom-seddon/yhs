@@ -379,6 +379,12 @@ By default, debug and info messages go to =stdout=, and errors go to
 - Have the file server handler check for =index.html= and, if present,
   respond with its contents rather than the files listing?
 
+- Currently does a poor job of handling duplicated header lines
+  conveniently; instead of requiring repeated yhs_find_header_field
+  calls to find them all, it should just join them on receipt (see
+  section 4.2) and provide some API for accessing comma-separated
+  lists as a list as well as the string.
+
 * Other embeddable web serving options
 
 If you disagree with the choices made here, perhaps one of these other

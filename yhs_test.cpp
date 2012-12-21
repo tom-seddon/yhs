@@ -283,9 +283,33 @@ static void HandleTerminate(yhsRequest *re)
 
 static void HandleWSEcho(yhsRequest *re)
 {
+	std::vector<unsigned char> payload;
+
 	yhs_accept_websocket(re,0);
 
-	yhs_text(re,"WEBSOCKET BACK ATCHA");
+	int fin=0,is_text;
+	while(!fin)
+	{
+		const int CHUNK_SIZE=4096;
+		size_t old_size=payload.size();
+		payload.resize(payload.size()+CHUNK_SIZE);
+
+		int n=yhs_recv_websocket(re,&payload[old_size],CHUNK_SIZE,&fin,&is_text);
+		if(n<=0)
+		{
+			// parp
+			return;
+		}
+
+		if(n<CHUNK_SIZE)
+			payload.resize(old_size+n);
+	}
+
+	yhs_begin_websocket_frame(re,0);
+
+	yhs_data(re,&payload[0],payload.size());
+
+	yhs_end_websocket_frame(re);
 }
 
 #ifdef WIN32

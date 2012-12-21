@@ -193,6 +193,8 @@ YHS_EXTERN void yhs_begin_data_response(yhsRequest *req,const char *type);
 // - Space for the expansion is limited; see the MAX_TEXT_LEN constant.
 //
 // - Response data is automatically discarded when processing a HEAD request.
+//
+// - There is no difference between text and data, except for the API.
 YHS_EXTERN void yhs_textf(yhsRequest *req,const char *fmt,...) YHS_PRINTF_LIKE(2,3);
 YHS_EXTERN void yhs_textv(yhsRequest *req,const char *fmt,va_list v);
 YHS_EXTERN void yhs_text(yhsRequest *req,const char *text);
@@ -313,12 +315,6 @@ YHS_EXTERN void yhs_pixel(yhsRequest *respones,int r,int g,int b,int a);
 // status_line - the status line, as per the HTTP spec, without the leading
 //               "HTTP/1.1 ". e.g., "200 OK".
 //
-// args - handler args, if you have them (NULL is fine)
-//
-// NOTES
-//
-// - the handler args are used to display the HTTP method and resource path;
-//   if args is NULL, this information won't be provided.
 YHS_EXTERN void yhs_error_response(yhsRequest *req,const char *status_line);
 
 //////////////////////////////////////////////////////////////////////////
@@ -369,6 +365,9 @@ YHS_EXTERN int yhs_select_websocket(yhsRequest *re,int *can_read,int *can_write)
 //       the read finished due to reaching the end of the frame, or false
 //       otherwise.
 //
+// is_text - if non-NULL, on success (i.e., return >0), *is_text will be set to
+//           true if the data was a text frame, or false if was a binary frame.
+//
 // OUT
 //
 // int - recv-style return value. If >0, number of bytes actually read (may be
@@ -378,7 +377,17 @@ YHS_EXTERN int yhs_select_websocket(yhsRequest *re,int *can_read,int *can_write)
 // NOTES
 //
 // - if fin is NULL, it's hard to tell whether there's more data to come.
-YHS_EXTERN int yhs_recv_websocket(yhsRequest *re,void *buf,size_t buf_size,int *fin);
+//
+// - the text/binary distinction is not expected to be important at recv time
+//   (at least, not in C/C++), which is why you get it alongside the data rather
+//   than before it.
+//
+// - it's quite safe to pass the same pointer for is_text each time and only
+//   check it once fin becomes set - the result will be accurate.
+YHS_EXTERN int yhs_recv_websocket(yhsRequest *re,void *buf,size_t buf_size,int *fin,int *is_text);
+
+YHS_EXTERN void yhs_begin_websocket_frame(yhsRequest *re,int is_text);
+YHS_EXTERN void yhs_end_websocket_frame(yhsRequest *re);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

@@ -287,29 +287,44 @@ static void HandleWSEcho(yhsRequest *re)
 
 	yhs_accept_websocket(re,0);
 
-	int fin=0,is_text;
-	while(!fin)
+	for(;;)
 	{
-		const int CHUNK_SIZE=4096;
-		size_t old_size=payload.size();
-		payload.resize(payload.size()+CHUNK_SIZE);
-
-		int n=yhs_recv_websocket(re,&payload[old_size],CHUNK_SIZE,&fin,&is_text);
-		if(n<=0)
+		int is_text;
+		if(yhs_begin_recv_websocket_frame(re,&is_text))
 		{
-			// parp
-			return;
+			for(;;)
+			{
+				const int CHUNK_SIZE=4096;
+				size_t old_size=payload.size(),n;
+				payload.resize(payload.size()+CHUNK_SIZE);
+
+				if(!yhs_recv(re,&payload[old_size],CHUNK_SIZE,&n))
+					return;
+
+				payload.resize(old_size+n);
+
+				if(n==0)
+					break;
+			}
+
+			printf("got %u bytes.\n",(unsigned)payload.size());
+
+			yhs_end_recv_websocket_frame(re);
+
+			yhs_begin_send_websocket_frame(re,is_text);
+
+			if(!payload.empty())
+				yhs_data(re,&payload[0],payload.size());
+
+			yhs_end_send_websocket_frame(re);
+
+// 			printf("sleep...\n");
+// 			Sleep(5000);
+// 			printf("    done.\n");
+
+			break;
 		}
-
-		if(n<CHUNK_SIZE)
-			payload.resize(old_size+n);
 	}
-
-	yhs_begin_websocket_frame(re,0);
-
-	yhs_data(re,&payload[0],payload.size());
-
-	yhs_end_websocket_frame(re);
 }
 
 #ifdef WIN32

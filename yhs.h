@@ -384,10 +384,14 @@ YHS_EXTERN int yhs_select_websocket(yhsRequest *re,int *can_read,int *can_write)
 //
 // - it's quite safe to pass the same pointer for is_text each time and only
 //   check it once fin becomes set - the result will be accurate.
-YHS_EXTERN int yhs_recv_websocket(yhsRequest *re,void *buf,size_t buf_size,int *fin,int *is_text);
+//YHS_EXTERN int yhs_recv_websocket(yhsRequest *re,void *buf,size_t buf_size,int *fin,int *is_text);
 
-YHS_EXTERN void yhs_begin_websocket_frame(yhsRequest *re,int is_text);
-YHS_EXTERN void yhs_end_websocket_frame(yhsRequest *re);
+YHS_EXTERN int yhs_begin_recv_websocket_frame(yhsRequest *re,int *is_text);
+YHS_EXTERN void yhs_end_recv_websocket_frame(yhsRequest *re);
+YHS_EXTERN int yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n);
+
+YHS_EXTERN void yhs_begin_send_websocket_frame(yhsRequest *re,int is_text);
+YHS_EXTERN void yhs_end_send_websocket_frame(yhsRequest *re);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -729,19 +733,19 @@ YHS_EXTERN yhsHandler *yhs_set_valid_methods(unsigned valid_methods,yhsHandler *
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-// A handler that serves files in response to GET/HEAD. Supply the local
-// path on the server (e.g., "/users/fred/html/", or "C:\\temp\\web")
-// as a string as the context pointer.
+// A handler that serves files in response to GET/HEAD. Supply the local path on
+// the server (e.g., "/users/fred/html/", or "C:\\temp\\web") as a string as the
+// context pointer.
 //
-// The requested path will be made relative to the resource path, and
-// that relative path appended to the local path to find the path to a
-// local resource.
+// The requested path will be made relative to the resource path, and that
+// relative path appended to the local path to find the path to a local
+// resource.
 //
-// If the path is a folder, the handler will supply a basic files listing
-// in the form of an HTML page.
+// If the path is a folder, the handler will supply a basic files listing in the
+// form of an HTML page.
 //
-// If the path is a file, the handler will send the file's contents,
-// with the MIME type being inferred from the extension.
+// If the path is a file, the handler will send the file's contents, with the
+// MIME type being inferred from the extension.
 //
 // IN
 //
@@ -750,9 +754,8 @@ YHS_EXTERN yhsHandler *yhs_set_valid_methods(unsigned valid_methods,yhsHandler *
 // NOTES
 //
 // - this is not intended to be amazingly clever, nor comprehensive, nor
-//   especially secure. You're sort of expected
-//   to only have one or two of these folders, for common resources such
-//   as PNGs or Javascript files.
+//   especially secure. You're sort of expected to only have one or two of these
+//   folders, for common resources such as PNGs or Javascript files.
 YHS_EXTERN void yhs_file_server_handler(yhsRequest *re);
 
 //////////////////////////////////////////////////////////////////////////

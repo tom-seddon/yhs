@@ -393,7 +393,7 @@ struct yhsHandler
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-struct PNGWriteState
+struct PNGData
 {
     // Dimensions of image and bytes/pixel.
     int w,h,bypp;
@@ -407,7 +407,7 @@ struct PNGWriteState
     // Adler sums for the Zlib encoding.
     uint32_t adler32_s1,adler32_s2;
 };
-typedef struct PNGWriteState PNGWriteState;
+typedef struct PNGData PNGData;
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -468,9 +468,12 @@ typedef enum WebSocketSendState WebSocketSendState;
 
 enum WebSocketOpcode
 {
+	// Data frames
 	WSO_CONTINUATION=0,
 	WSO_TEXT=1,
 	WSO_BINARY=2,
+
+	// Control frames
 	WSO_CLOSE=8,
 	WSO_PING=9,
 	WSO_PONG=10,
@@ -498,6 +501,50 @@ typedef struct KeyValuePair KeyValuePair;
 // SCHEME://HOST/PATH;PARAMS?QUERY#FRAGMENT
 // \____/   \__/\___/ \____/ \___/ \______/
 
+struct FormData
+{
+	size_t num_controls;
+	KeyValuePair *controls;
+	char *controls_data_buffer;
+};
+typedef struct FormData FormData;
+
+struct HeaderData
+{
+	char *data;
+	size_t data_size;
+	size_t method_pos;
+	size_t path_pos;
+	size_t first_field_pos;
+};
+typedef struct HeaderData HeaderData;
+
+struct WriteBufferData
+{
+	char data[WRITE_BUF_SIZE];
+	size_t data_size;
+};
+typedef struct WriteBufferData WriteBufferData;
+
+struct WebSocketData
+{
+	// websocket
+	char accept_str[SEC_WEBSOCKET_ACCEPT_LEN+1];
+
+	// websocket recv
+	WebSocketRecvState recv_state;
+	int recv_is_text;
+	int recv_is_fragmented;
+	int recv_offset;
+	WebSocketFrameHeader recv_fh;
+
+	// websocket send
+	WebSocketSendState send_state;
+	WebSocketOpcode send_opcode;
+	int send_fin;
+};
+typedef struct WebSocketData WebSocketData;
+
 struct yhsRequest
 {
 	yhsRequest *next_deferred,*prev_deferred;
@@ -510,41 +557,13 @@ struct yhsRequest
     SOCKET sock;
     yhsResponseType type;
 	yhsResponseState state;
-
-	// pngstuff
-    PNGWriteState png;
-
-    // form data
-    size_t num_controls;
-    KeyValuePair *controls;
-    char *controls_data_buffer;
-
-	// websocket
-	char ws_accept[SEC_WEBSOCKET_ACCEPT_LEN+1];
-
-	// websocket recv
-	WebSocketRecvState ws_recv_state;
-	int ws_recv_is_text;
-	int ws_recv_is_fragmented;
-	int ws_recv_offset;
-	WebSocketFrameHeader ws_recv_fh;
-
-	// websocket send
-	WebSocketSendState ws_send_state;
-	WebSocketOpcode ws_send_opcode;
-	int ws_send_fin;
-
-	// header data
 	yhsMethod method;
-	char *header_data;
-	size_t header_data_size;
-	size_t method_pos;
-	size_t path_pos;
-	size_t first_field_pos;
 
-	// write buffer
-	char write_buf[WRITE_BUF_SIZE];
-	size_t write_buf_data_size;
+    PNGData png;
+	FormData form;
+	HeaderData hdr;
+	WriteBufferData wbuf;
+	WebSocketData ws;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -1396,11 +1415,11 @@ static int send_unbuffered_frame(yhsRequest *re,WebSocketOpcode opcode,int fin,c
 
 static void flush_write_buf(yhsRequest *re)
 {
-	size_t n=re->write_buf_data_size;
+	size_t n=re->wbuf.data_size;
 
 	// always cancel any current contents. if the unbuffered sends fail,
 	// they'll call this function again.
-	re->write_buf_data_size=0;
+	re->wbuf.data_size=0;
 
 	// This is rather ugly... but very convenient.
 	//
@@ -1409,27 +1428,27 @@ static void flush_write_buf(yhsRequest *re)
 
 	if(re->type==RT_WEBSOCKET&&re->state==RS_DATA)
 	{
-		if(send_unbuffered_frame(re,re->ws_send_opcode,re->ws_send_fin,re->write_buf,n))
+		if(send_unbuffered_frame(re,re->ws.send_opcode,re->ws.send_fin,re->wbuf.data,n))
 		{
 			// if another packet is going to get sent, it will be a
 			// continuation one, so change the opcode here.
-			re->ws_send_opcode=WSO_CONTINUATION;
+			re->ws.send_opcode=WSO_CONTINUATION;
 		}
 	}
 	else
 	{
 		if(n>0)
-			send_unbuffered_bytes(re,re->write_buf,n);
+			send_unbuffered_bytes(re,re->wbuf.data,n);
 	}
 }
 
 static void send_byte(yhsRequest *re,uint8_t value)
 {
-	if(re->write_buf_data_size==WRITE_BUF_SIZE)
+	if(re->wbuf.data_size==WRITE_BUF_SIZE)
 		flush_write_buf(re);
 
-	assert(re->write_buf_data_size<WRITE_BUF_SIZE);
-	re->write_buf[re->write_buf_data_size++]=value;
+	assert(re->wbuf.data_size<WRITE_BUF_SIZE);
+	re->wbuf.data[re->wbuf.data_size++]=value;
 }
 
 static void send_string(yhsRequest *re,const char *str)
@@ -1474,16 +1493,16 @@ static void close_connection(yhsRequest *re)
 		re->sock=INVALID_SOCKET;
 	}
 
-	FREE(re->controls);
-	re->controls=0;
+	FREE(re->form.controls);
+	re->form.controls=0;
 
-	FREE(re->controls_data_buffer);
-	re->controls_data_buffer=0;
+	FREE(re->form.controls_data_buffer);
+	re->form.controls_data_buffer=0;
 
 	if(re->flags&RF_OWN_HEADER_DATA)
 	{
-		FREE(re->header_data);
-		re->header_data=0;
+		FREE(re->hdr.data);
+		re->hdr.data=0;
 	}
 }
 
@@ -1604,7 +1623,7 @@ static const yhsHandler toc_handler={
 
 const char *yhs_get_path(yhsRequest *re)
 {
-	const char *path=re->header_data+re->path_pos;
+	const char *path=re->hdr.data+re->hdr.path_pos;
 	return path;
 }
 
@@ -1639,7 +1658,7 @@ yhsMethod yhs_get_method(yhsRequest *re)
 
 const char *yhs_get_method_str(yhsRequest *re)
 {
-	const char *method=re->header_data+re->method_pos;
+	const char *method=re->hdr.data+re->hdr.method_pos;
 	return method;
 }
 
@@ -1652,11 +1671,11 @@ const char *yhs_find_header_field(yhsRequest *re,const char *key,const char *las
 	
 	if(last_result)
 	{
-		assert(last_result>=re->header_data+re->first_field_pos&&last_result<re->header_data+re->header_data_size);
+		assert(last_result>=re->hdr.data+re->hdr.first_field_pos&&last_result<re->hdr.data+re->hdr.data_size);
 		field=last_result+strlen(last_result)+1;
 	}
 	else
-		field=re->header_data+re->first_field_pos;
+		field=re->hdr.data+re->hdr.first_field_pos;
 
 	for(;;)
 	{
@@ -1793,7 +1812,7 @@ static int maybe_upgrade_to_websocket(yhsRequest *re)
 	}
 
 	// Form the accept token.
-	make_ws_accept(re->ws_accept,sec_websocket_key);
+	make_ws_accept(re->ws.accept_str,sec_websocket_key);
 
 	re->method=YHS_METHOD_WEBSOCKET;
 
@@ -1828,20 +1847,20 @@ static int accept_new_connections(yhsServer *server)
 		re.server=server;
 
 		re.server=server;
-		re.header_data=header_data_buf;
+		re.hdr.data=header_data_buf;
 
 		// read header and 0-terminate so that it ends with a single \r\n.
-		if(!read_request_header(re.sock,re.header_data,MAX_REQUEST_SIZE,&re.header_data_size))
+		if(!read_request_header(re.sock,re.hdr.data,MAX_REQUEST_SIZE,&re.hdr.data_size))
 		{
 			yhs_error_response(&re,"500 Internal Server Error");
 			goto done;
 		}
 
-		YHS_DEBUG_MSG("REQUEST(RAW): %u/%u bytes:\n---8<---\n",(unsigned)re.header_data_size,sizeof header_data_buf);
-		debug_dump_string(re.header_data,-1);
+		YHS_DEBUG_MSG("REQUEST(RAW): %u/%u bytes:\n---8<---\n",(unsigned)re.hdr.data_size,sizeof header_data_buf);
+		debug_dump_string(re.hdr.data,-1);
 		YHS_DEBUG_MSG("\n---8<---\n");
 
-		if(!process_request_header(re.header_data,&re.method_pos,&re.path_pos,&re.first_field_pos))
+		if(!process_request_header(re.hdr.data,&re.hdr.method_pos,&re.hdr.path_pos,&re.hdr.first_field_pos))
 		{
 			yhs_error_response(&re,"400 Bad Request");
 			goto done;
@@ -2309,7 +2328,7 @@ void yhs_accept_websocket(yhsRequest *re,const char *protocol)
 	assert(re->method==YHS_METHOD_WEBSOCKET);
 
 	header(re,RT_WEBSOCKET,"101 Switching Protocols");
-	yhs_header_field(re,"Sec-WebSocket-Accept",re->ws_accept);
+	yhs_header_field(re,"Sec-WebSocket-Accept",re->ws.accept_str);
 	yhs_header_field(re,"Upgrade","websocket");
 	yhs_header_field(re,"Connection","Upgrade");
 
@@ -2584,20 +2603,20 @@ int yhs_begin_recv_websocket_frame(yhsRequest *re,int *is_text)
 	ensure_websocket_handshake_finished(re);
 
 	assert(re->type==RT_WEBSOCKET);
-	assert(re->ws_recv_state==WSRS_NONE);
+	assert(re->ws.recv_state==WSRS_NONE);
 
-	if(!do_control_frames(re,&re->ws_recv_fh,&got_data_frame,0))//0=don't block
+	if(!do_control_frames(re,&re->ws.recv_fh,&got_data_frame,0))//0=don't block
 		return 0;//
 
 	if(!got_data_frame)
 		return 0;
 
-	if(re->ws_recv_fh.opcode==WSO_TEXT)
+	if(re->ws.recv_fh.opcode==WSO_TEXT)
 	{
 		if(is_text)
 			*is_text=1;
 	}
-	else if(re->ws_recv_fh.opcode==WSO_BINARY)
+	else if(re->ws.recv_fh.opcode==WSO_BINARY)
 	{
 		if(is_text)
 			*is_text=0;
@@ -2610,16 +2629,16 @@ int yhs_begin_recv_websocket_frame(yhsRequest *re,int *is_text)
 		return 0;
 	}
 
-	re->ws_recv_state=WSRS_RECV;
-	re->ws_recv_is_fragmented=!re->ws_recv_fh.fin;
-	re->ws_recv_offset=0;
+	re->ws.recv_state=WSRS_RECV;
+	re->ws.recv_is_fragmented=!re->ws.recv_fh.fin;
+	re->ws.recv_offset=0;
 
 	return 1;
 }
 
 void yhs_end_recv_websocket_frame(yhsRequest *re)
 {
-	if(re->ws_recv_state!=WSRS_NONE)
+	if(re->ws.recv_state!=WSRS_NONE)
 	{
 		// there's some data hanging around, so just discard it.
 		for(;;)
@@ -2633,7 +2652,7 @@ void yhs_end_recv_websocket_frame(yhsRequest *re)
 				break;
 		}
 
-		assert(re->ws_recv_state==WSRS_NONE);
+		assert(re->ws.recv_state==WSRS_NONE);
 	}
 }
 
@@ -2661,54 +2680,54 @@ int yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n)
 	// loop on incoming packets.
 	for(;;)
 	{
-		switch(re->ws_recv_state)
+		switch(re->ws.recv_state)
 		{
 		default:
 		case WSRS_NONE:
 			{
 				int got_data_frame;
-				if(!do_control_frames(re,&re->ws_recv_fh,&got_data_frame,1))//1=block
+				if(!do_control_frames(re,&re->ws.recv_fh,&got_data_frame,1))//1=block
 					return 0;
 
 				if(!got_data_frame)
 					return 0;
 
-				re->ws_recv_state=WSRS_FRAME;
+				re->ws.recv_state=WSRS_FRAME;
 			}
 			break;
 
 		case WSRS_FRAME:
 			{
-				assert(!(re->ws_recv_fh.opcode&8));
+				assert(!(re->ws.recv_fh.opcode&8));
 
 				// data.
-				switch(re->ws_recv_fh.opcode)
+				switch(re->ws.recv_fh.opcode)
 				{
 				case WSO_CONTINUATION:
-					if(!re->ws_recv_is_fragmented)
+					if(!re->ws.recv_is_fragmented)
 					{
 						YHS_ERR("received unexpected continuation frame");
 						goto bad;
 					}
 
-					re->ws_recv_state=WSRS_RECV;
-					re->ws_recv_offset=0;
+					re->ws.recv_state=WSRS_RECV;
+					re->ws.recv_offset=0;
 					break;
 
 				case WSO_TEXT:
 				case WSO_BINARY:
-					if(re->ws_recv_is_fragmented)
+					if(re->ws.recv_is_fragmented)
 					{
 						YHS_ERR("received data frame while processing fragmented frame");
 						goto bad;
 					}
 
-					re->ws_recv_is_text=re->ws_recv_fh.opcode==WSO_TEXT;
-					re->ws_recv_is_fragmented=!re->ws_recv_fh.fin;
-					//re->ws_first_fh=re->ws_recv_fh;// TODO: this isn't very useful.
+					re->ws.recv_is_text=re->ws.recv_fh.opcode==WSO_TEXT;
+					re->ws.recv_is_fragmented=!re->ws.recv_fh.fin;
+					//re->ws.first_fh=re->ws.recv_fh;// TODO: this isn't very useful.
 
-					re->ws_recv_offset=0;
-					re->ws_recv_state=WSRS_RECV;
+					re->ws.recv_offset=0;
+					re->ws.recv_state=WSRS_RECV;
 					break;
 				}
 			}
@@ -2718,11 +2737,11 @@ int yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n)
 			{
 				int num_to_recv;
 
-				assert(re->ws_recv_fh.opcode==WSO_CONTINUATION||re->ws_recv_fh.opcode==WSO_TEXT||re->ws_recv_fh.opcode==WSO_BINARY);
+				assert(re->ws.recv_fh.opcode==WSO_CONTINUATION||re->ws.recv_fh.opcode==WSO_TEXT||re->ws.recv_fh.opcode==WSO_BINARY);
 
 				// how many bytes to recv?
 				{
-					int num_left=re->ws_recv_fh.len-re->ws_recv_offset;
+					int num_left=re->ws.recv_fh.len-re->ws.recv_offset;
 
 					num_to_recv=dest_size;
 					if(num_to_recv>num_left)
@@ -2740,17 +2759,17 @@ int yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n)
 				}
 
 				// unmask
-				if(re->ws_recv_fh.mask)
+				if(re->ws.recv_fh.mask)
 				{
 					int i;
 
 					for(i=0;i<rr;++i)
-						dest[i]^=re->ws_recv_fh.masking_key[(re->ws_recv_offset+i)&3];
+						dest[i]^=re->ws.recv_fh.masking_key[(re->ws.recv_offset+i)&3];
 				}
 
 				// adjust frame length.
-				re->ws_recv_offset+=rr;
-				assert(re->ws_recv_offset<=re->ws_recv_fh.len);
+				re->ws.recv_offset+=rr;
+				assert(re->ws.recv_offset<=re->ws.recv_fh.len);
 
 				// bump bufferstuff.
 				if(dest)
@@ -2760,9 +2779,9 @@ int yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n)
 				dest_size-=rr;
 
 				// if frame is finished, set up state for the next one.
-				if(re->ws_recv_offset==re->ws_recv_fh.len)
+				if(re->ws.recv_offset==re->ws.recv_fh.len)
 				{
-					re->ws_recv_state=WSRS_NONE;
+					re->ws.recv_state=WSRS_NONE;
 
 					*n=dest-(char *)buf;
 					return 1;
@@ -2797,11 +2816,11 @@ void yhs_begin_send_websocket_frame(yhsRequest *re,int is_text)
 
 	//flush_write_buf(re);
 
-	assert(re->ws_send_state==WSSS_NONE);
-	re->ws_send_state=WSSS_SEND;
+	assert(re->ws.send_state==WSSS_NONE);
+	re->ws.send_state=WSSS_SEND;
 
-	re->ws_send_opcode=is_text?WSO_TEXT:WSO_BINARY;
-	re->ws_send_fin=0;
+	re->ws.send_opcode=is_text?WSO_TEXT:WSO_BINARY;
+	re->ws.send_fin=0;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2810,13 +2829,13 @@ void yhs_begin_send_websocket_frame(yhsRequest *re,int is_text)
 void yhs_end_send_websocket_frame(yhsRequest *re)
 {
 	assert(re->type==RT_WEBSOCKET);
-	assert(re->ws_send_state==WSSS_SEND);
+	assert(re->ws.send_state==WSSS_SEND);
 
-	re->ws_send_fin=1;
+	re->ws.send_fin=1;
 
 	flush_write_buf(re);
 
-	re->ws_send_state=WSSS_NONE;
+	re->ws.send_state=WSSS_NONE;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2845,7 +2864,7 @@ int yhs_defer_response(yhsRequest *re,yhsRequest **chain)
 	assert(!(re->flags&(RF_DEFERRED|RF_OWN_HEADER_DATA)));
 
 	dre=(yhsRequest *)MALLOC(sizeof *dre);
-	new_header_data=(char *)MALLOC(re->header_data_size);
+	new_header_data=(char *)MALLOC(re->hdr.data_size);
 
 	if(!dre||!new_header_data)
 	{
@@ -2860,8 +2879,8 @@ int yhs_defer_response(yhsRequest *re,yhsRequest **chain)
 	dre->flags|=RF_DEFERRED;
 
 	// take a copy of the header data.
-	dre->header_data=new_header_data;
-	memcpy(dre->header_data,re->header_data,re->header_data_size);
+	dre->hdr.data=new_header_data;
+	memcpy(dre->hdr.data,re->hdr.data,re->hdr.data_size);
 	dre->flags|=RF_OWN_HEADER_DATA;
 
 	// add to the links.
@@ -2997,42 +3016,42 @@ YHS_EXTERN int yhs_read_form_content(yhsRequest *re)
         goto done;
     
     // Get form data and pop a \0x at the end.
-	assert(!re->controls_data_buffer);
-    re->controls_data_buffer=(char *)MALLOC(content_length+1);
-    if(!re->controls_data_buffer)
+	assert(!re->form.controls_data_buffer);
+    re->form.controls_data_buffer=(char *)MALLOC(content_length+1);
+    if(!re->form.controls_data_buffer)
         goto done;
     
-    if(!yhs_get_content(re,content_length,re->controls_data_buffer))
+    if(!yhs_get_content(re,content_length,re->form.controls_data_buffer))
         goto done;
     
-    re->controls_data_buffer[content_length]=0;
+    re->form.controls_data_buffer[content_length]=0;
     
     // Count controls.
-    re->num_controls=1;
+    re->form.num_controls=1;
     {
         int i;
         
-        for(i=0;re->controls_data_buffer[i]!=0;++i)
+        for(i=0;re->form.controls_data_buffer[i]!=0;++i)
         {
-            if(re->controls_data_buffer[i]=='&')
-                ++re->num_controls;
+            if(re->form.controls_data_buffer[i]=='&')
+                ++re->form.num_controls;
         }
     }
     
     // Controls...
-    re->controls=(KeyValuePair *)MALLOC(re->num_controls*sizeof *re->controls);
-	if(!re->controls)
+    re->form.controls=(KeyValuePair *)MALLOC(re->form.num_controls*sizeof *re->form.controls);
+	if(!re->form.controls)
 		goto done;
     
     //
     {
-        KeyValuePair *control=re->controls;
-        char *dest=re->controls_data_buffer;
-        const char *src=re->controls_data_buffer;
+        KeyValuePair *control=re->form.controls;
+        char *dest=re->form.controls_data_buffer;
+        const char *src=re->form.controls_data_buffer;
         
-        while(src<re->controls_data_buffer+content_length)
+        while(src<re->form.controls_data_buffer+content_length)
         {
-            assert(control<re->controls+re->num_controls);
+            assert(control<re->form.controls+re->form.num_controls);
             
             // Store control name
             control->key=dest;
@@ -3077,7 +3096,7 @@ YHS_EXTERN int yhs_read_form_content(yhsRequest *re)
             ++control;//next control
         }
         
-        assert(control==re->controls+re->num_controls);
+        assert(control==re->form.controls+re->form.num_controls);
     }
     
     good=1;
@@ -3085,13 +3104,13 @@ YHS_EXTERN int yhs_read_form_content(yhsRequest *re)
 done:
     if(!good)
     {
-        FREE(re->controls_data_buffer);
-		re->controls_data_buffer=NULL;
+        FREE(re->form.controls_data_buffer);
+		re->form.controls_data_buffer=NULL;
         
-        FREE(re->controls);
-        re->controls=NULL;
+        FREE(re->form.controls);
+        re->form.controls=NULL;
 		
-        re->num_controls=0;
+        re->form.num_controls=0;
     }
     
     return good;
@@ -3101,9 +3120,9 @@ YHS_EXTERN const char *yhs_find_control_value(yhsRequest *re,const char *control
 {
     size_t i;
     
-    for(i=0;i<re->num_controls;++i)
+    for(i=0;i<re->form.num_controls;++i)
     {
-        const KeyValuePair *kvp=&re->controls[i];
+        const KeyValuePair *kvp=&re->form.controls[i];
         
         if(strcmp(kvp->key,control_name)==0)
             return kvp->value;
@@ -3114,21 +3133,21 @@ YHS_EXTERN const char *yhs_find_control_value(yhsRequest *re,const char *control
 
 YHS_EXTERN size_t yhs_get_num_controls(yhsRequest *re)
 {
-    return re->num_controls;
+    return re->form.num_controls;
 }
 
 YHS_EXTERN const char *yhs_get_control_name(yhsRequest *re,size_t index)
 {
-    assert(index<re->num_controls);
+    assert(index<re->form.num_controls);
     
-    return re->controls[index].key;
+    return re->form.controls[index].key;
 }
 
 YHS_EXTERN const char *yhs_get_control_value(yhsRequest *re,size_t index)
 {
-    assert(index<re->num_controls);
+    assert(index<re->form.num_controls);
     
-    return re->controls[index].value;
+    return re->form.controls[index].value;
 }
 
 //////////////////////////////////////////////////////////////////////////

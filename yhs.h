@@ -58,6 +58,12 @@ typedef struct yhsRequest yhsRequest;
 struct yhsHandler;
 typedef struct yhsHandler yhsHandler;
 
+// yes, it's another bool type...
+//
+// this is purely for documentation purposes. yhsBool = int, and that's a
+// promise.
+typedef int yhsBool;
+
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
@@ -160,7 +166,7 @@ YHS_EXTERN void yhs_delete_server(yhsServer *server);
 //   incoming. There's no specific limit to how many requests it will
 //   handle and how long this will take. However, if there's nothing to
 //   do, it should return pretty quickly.
-YHS_EXTERN int yhs_update(yhsServer *server);
+YHS_EXTERN yhsBool yhs_update(yhsServer *server);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -386,9 +392,9 @@ YHS_EXTERN int yhs_select_websocket(yhsRequest *re,int *can_read,int *can_write)
 //   check it once fin becomes set - the result will be accurate.
 //YHS_EXTERN int yhs_recv_websocket(yhsRequest *re,void *buf,size_t buf_size,int *fin,int *is_text);
 
-YHS_EXTERN int yhs_begin_recv_websocket_frame(yhsRequest *re,int *is_text);
+YHS_EXTERN yhsBool yhs_begin_recv_websocket_frame(yhsRequest *re,int *is_text);
 YHS_EXTERN void yhs_end_recv_websocket_frame(yhsRequest *re);
-YHS_EXTERN int yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n);
+YHS_EXTERN yhsBool yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n);
 
 YHS_EXTERN void yhs_begin_send_websocket_frame(yhsRequest *re,int is_text);
 YHS_EXTERN void yhs_end_send_websocket_frame(yhsRequest *re);
@@ -443,7 +449,7 @@ YHS_EXTERN void yhs_header_field(yhsRequest *req,const char *name,const char *va
 //
 // - Deferred responses use up resources until they are actually dealt with.
 //
-YHS_EXTERN int yhs_defer_response(yhsRequest *re,yhsRequest **chain);
+YHS_EXTERN yhsBool yhs_defer_response(yhsRequest *re,yhsRequest **chain);
 
 // Method of iteration:
 //
@@ -563,7 +569,7 @@ YHS_EXTERN const char *yhs_get_path_handler_relative(yhsRequest *re);
 // NOTES
 //
 // - you can fetch the content in pieces.
-YHS_EXTERN int yhs_get_content(yhsRequest *req,int n,char *buf);
+YHS_EXTERN yhsBool yhs_get_content(yhsRequest *req,int n,char *buf);
 
 // Access control data from a POSTed form.
 //
@@ -583,7 +589,7 @@ YHS_EXTERN int yhs_get_content(yhsRequest *req,int n,char *buf);
 //   yhs_get_content.
 //
 // - yhs_read_form_content allocates memory.
-YHS_EXTERN int yhs_read_form_content(yhsRequest *req);
+YHS_EXTERN yhsBool yhs_read_form_content(yhsRequest *req);
 
 // Retrieve value for a control.
 //

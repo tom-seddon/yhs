@@ -2580,6 +2580,19 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 		YHS_INFO_MSG("%s: got frame: opcode=%d, fin=%d, len=%d.\n",__FUNCTION__,fh->opcode,fh->fin,fh->len);
 		if(!(fh->opcode&8))
 		{
+			switch(fh->opcode)
+			{
+			default:
+				YHS_ERR("received data frame with unknown opcode");
+				goto bad;
+
+			case WSO_CONTINUATION:
+			case WSO_TEXT:
+			case WSO_BINARY:
+				// OK.
+				break;
+			}
+
 			if(mode==DCFM_WAIT_FOR_CLOSE)
 			{
 				// discard frame.
@@ -2700,8 +2713,8 @@ static int begin_recv_websocket_frame(yhsRequest *re,int *is_text)
 	}
 	else
 	{
-		close_connection_forcibly(re,__FUNCTION__);
-		return 0;
+ 		close_connection_forcibly(re,__FUNCTION__);
+ 		return 0;
 	}
 
 	re->ws.recv.state=WSRS_RECV;

@@ -2583,12 +2583,16 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 			if(mode==DCFM_WAIT_FOR_CLOSE)
 			{
 				// discard frame.
-				//
-				// should really check the frame for validity, but the code is
-				// just not structured to make that at all convenient.
-				rr=recv_websocket_bytes(re,0,fh->len,"recv data to discard while awaiting close");
-				if(rr<=0)
-					goto bad;
+
+				if(fh->len>0)
+				{
+					// TODO: should really check the frame for validity, but the
+					// code is just not structured to make that at all
+                    // convenient.
+					rr=recv_websocket_bytes(re,0,fh->len,"recv data to discard while awaiting close");
+					if(rr<=0)
+						goto bad;
+				}
 
 				continue;
 			}
@@ -2615,10 +2619,22 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 			goto bad;
 		}
 
-		// retrieve payload.
-		rr=recv_websocket_bytes(re,payload,(int)fh->len,"recv web socket control frame payload");
-		if(rr<=0)
-			goto bad;
+		// retrieve and unmask payload.
+		if(fh->len>0)
+		{
+			rr=recv_websocket_bytes(re,payload,(int)fh->len,"recv web socket control frame payload");
+			if(rr<=0)
+				goto bad;
+
+			// unmask payload.
+			if(fh->mask)
+			{
+				int i;
+
+				for(i=0;i<fh->len;++i)
+					payload[i]^=fh->masking_key[i&3];
+			}
+		}
 
 		// do whatever.
 		switch(fh->opcode)

@@ -287,7 +287,7 @@ static void HandleWSEcho(yhsRequest *re)
 
 	yhs_accept_websocket(re,0);
 
-	for(;;)
+	while(yhs_is_websocket_open(re))
 	{
 		int is_text;
 		if(yhs_begin_recv_websocket_frame(re,&is_text))
@@ -298,7 +298,7 @@ static void HandleWSEcho(yhsRequest *re)
 				size_t old_size=payload.size(),n;
 				payload.resize(payload.size()+CHUNK_SIZE);
 
-				if(!yhs_recv(re,&payload[old_size],CHUNK_SIZE,&n))
+				if(!yhs_recv_websocket_data(re,&payload[old_size],CHUNK_SIZE,&n))
 					return;
 
 				payload.resize(old_size+n);
@@ -317,10 +317,6 @@ static void HandleWSEcho(yhsRequest *re)
 				yhs_data(re,&payload[0],payload.size());
 
 			yhs_end_send_websocket_frame(re);
-
-// 			printf("sleep...\n");
-// 			Sleep(5000);
-// 			printf("    done.\n");
 
 			break;
 		}

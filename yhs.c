@@ -178,7 +178,7 @@ enum
     // Maximum length of format string expansion when using yhs_text*
     MAX_TEXT_LEN=8192,
     
-    // Size of write buffer
+    // Size of write buffer.
     WRITE_BUF_SIZE=1000,
 	
 	// Max size of server name
@@ -446,16 +446,21 @@ enum yhsResponseState
 };
 typedef enum yhsResponseState yhsResponseState;
 
+enum WebSocketState
+{
+	WSS_NONE,
+	WSS_OPEN,
+	WSS_CLOSING,
+	WSS_CLOSED,
+};
+typedef enum WebSocketState WebSocketState;
+
 enum WebSocketRecvState
 {
-	// No frame.
 	WSRS_NONE,
-
-	// Processing frame. First fragment's header is in first_fh.
-	WSRS_FRAME,
-
-	// Read a data frame, possibly in parts.
 	WSRS_RECV,
+	WSRS_NEXT_FRAGMENT,
+	WSRS_DONE,
 };
 typedef enum WebSocketRecvState WebSocketRecvState;
 
@@ -482,7 +487,6 @@ typedef enum WebSocketOpcode WebSocketOpcode;
 
 struct WebSocketFrameHeader
 {
-	// It's true - I don't know what a bitfield is.
 	uint8_t fin;
 	uint8_t opcode;
 	uint8_t mask;
@@ -519,29 +523,43 @@ struct HeaderData
 };
 typedef struct HeaderData HeaderData;
 
+typedef void (*WriteBufferFlushFn)(yhsRequest *);
+
 struct WriteBufferData
 {
 	char data[WRITE_BUF_SIZE];
 	size_t data_size;
+	WriteBufferFlushFn flush_fn;
 };
 typedef struct WriteBufferData WriteBufferData;
 
+struct WebSocketRecvData
+{
+	// websocket recv
+	WebSocketRecvState state;
+	int is_text;
+	int is_fragmented;
+	int offset;
+	WebSocketFrameHeader fh;
+};
+typedef struct WebSocketRecvData WebSocketRecvData;
+
+struct WebSocketSendData
+{
+	// websocket send
+	WebSocketSendState state;
+	WebSocketOpcode opcode;
+	int fin;
+};
+typedef struct WebSocketSendData WebSocketSendData;
+
 struct WebSocketData
 {
-	// websocket
+	WebSocketState state;
 	char accept_str[SEC_WEBSOCKET_ACCEPT_LEN+1];
 
-	// websocket recv
-	WebSocketRecvState recv_state;
-	int recv_is_text;
-	int recv_is_fragmented;
-	int recv_offset;
-	WebSocketFrameHeader recv_fh;
-
-	// websocket send
-	WebSocketSendState send_state;
-	WebSocketOpcode send_opcode;
-	int send_fin;
+	WebSocketSendData send;
+	WebSocketRecvData recv;
 };
 typedef struct WebSocketData WebSocketData;
 
@@ -1307,7 +1325,7 @@ static yhsHandler *find_handler_for_res_path(yhsServer *server,const char *res_p
 //////////////////////////////////////////////////////////////////////////
 
 // TODO: fix wayward layering.
-static void close_connection(yhsRequest *re);
+static void close_connection_forcibly(yhsRequest *re,const char *reason);
 
 static int send_unbuffered_bytes(yhsRequest *re,const void *data,size_t num_bytes)
 {
@@ -1320,7 +1338,7 @@ static int send_unbuffered_bytes(yhsRequest *re,const void *data,size_t num_byte
 		if(n<=0)
 		{
 			YHS_SOCKET_ERR("write.");
-			close_connection(re);
+			close_connection_forcibly(re,__FUNCTION__);
 			return 0;
 		}
 
@@ -1407,6 +1425,26 @@ static int send_unbuffered_frame(yhsRequest *re,WebSocketOpcode opcode,int fin,c
 	return 1;
 }
 
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static void flush_data(yhsRequest *re)
+{
+	send_unbuffered_bytes(re,re->wbuf.data,re->wbuf.data_size);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static void flush_websocket_frame(yhsRequest *re)
+{
+	if(send_unbuffered_frame(re,re->ws.send.opcode,re->ws.send.fin,re->wbuf.data,re->wbuf.data_size))
+	{
+		// if another packet is going to get sent, it will be a
+		// continuation one, so change the opcode here.
+		re->ws.send.opcode=WSO_CONTINUATION;
+	}
+}
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -1415,30 +1453,16 @@ static int send_unbuffered_frame(yhsRequest *re,WebSocketOpcode opcode,int fin,c
 
 static void flush_write_buf(yhsRequest *re)
 {
-	size_t n=re->wbuf.data_size;
-
-	// always cancel any current contents. if the unbuffered sends fail,
-	// they'll call this function again.
-	re->wbuf.data_size=0;
-
-	// This is rather ugly... but very convenient.
-	//
-	// (`flush_write_buf' should ideally be the lowest layer, pretty much,
-	// and not bother itself with any websocket nonsense.)
-
-	if(re->type==RT_WEBSOCKET&&re->state==RS_DATA)
+	if(re->wbuf.flush_fn)
 	{
-		if(send_unbuffered_frame(re,re->ws.send_opcode,re->ws.send_fin,re->wbuf.data,n))
-		{
-			// if another packet is going to get sent, it will be a
-			// continuation one, so change the opcode here.
-			re->ws.send_opcode=WSO_CONTINUATION;
-		}
-	}
-	else
-	{
-		if(n>0)
-			send_unbuffered_bytes(re,re->wbuf.data,n);
+		WriteBufferFlushFn flush_fn=re->wbuf.flush_fn;
+
+		re->wbuf.flush_fn=0;
+
+		(*flush_fn)(re);
+
+		re->wbuf.flush_fn=flush_fn;
+		re->wbuf.data_size=0;
 	}
 }
 
@@ -1469,26 +1493,15 @@ static void reset_request(yhsRequest *re)
 	re->sock=INVALID_SOCKET;
 }
 
-static void close_connection(yhsRequest *re)
+static void close_connection_forcibly(yhsRequest *re,const char *reason)
 {
-	printf("%s\n",__FUNCTION__);
+	YHS_INFO_MSG("%s: reason: \"%s\"\n",__FUNCTION__,reason);
+
+	if(re->type==RT_WEBSOCKET)
+		re->ws.state=WSS_CLOSED;
 
 	if(re->sock!=INVALID_SOCKET)
 	{
-		flush_write_buf(re);
-
-		switch(re->type)
-		{
-		case RT_IMAGE:
-			assert(re->png.y==re->png.h);
-			break;
-
- 		case RT_WEBSOCKET:
- 			{
- 			}
- 			break;
-		}
-
 		CLOSESOCKET(re->sock);
 		re->sock=INVALID_SOCKET;
 	}
@@ -1504,6 +1517,26 @@ static void close_connection(yhsRequest *re)
 		FREE(re->hdr.data);
 		re->hdr.data=0;
 	}
+}
+
+static void do_websocket_closing_handshake(yhsRequest *re);
+
+static void close_connection_cleanly(yhsRequest *re)
+{
+	flush_write_buf(re);
+
+	switch(re->type)
+	{
+	case RT_IMAGE:
+		assert(re->png.y==re->png.h);
+		break;
+
+	case RT_WEBSOCKET:
+		do_websocket_closing_handshake(re);
+		break;
+	}
+
+	close_connection_forcibly(re,0);
 }
 
 static void header(yhsRequest *re,yhsResponseType type,const char *status)
@@ -1822,8 +1855,6 @@ static int maybe_upgrade_to_websocket(yhsRequest *re)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-static void send_unbuffered_close_frame(yhsRequest *re);
-
 static int accept_new_connections(yhsServer *server)
 {
 	int any=0;
@@ -1859,6 +1890,8 @@ static int accept_new_connections(yhsServer *server)
 		YHS_DEBUG_MSG("REQUEST(RAW): %u/%u bytes:\n---8<---\n",(unsigned)re.hdr.data_size,sizeof header_data_buf);
 		debug_dump_string(re.hdr.data,-1);
 		YHS_DEBUG_MSG("\n---8<---\n");
+
+		re.wbuf.flush_fn=&flush_data;
 
 		if(!process_request_header(re.hdr.data,&re.hdr.method_pos,&re.hdr.path_pos,&re.hdr.first_field_pos))
 		{
@@ -1922,10 +1955,7 @@ static int accept_new_connections(yhsServer *server)
 done:
 		if(re.type!=RT_DEFER)
 		{
-			if(re.type==RT_WEBSOCKET)
-				send_unbuffered_close_frame(&re);
-
-			close_connection(&re);
+			close_connection_cleanly(&re);
 		}
 	}
 
@@ -2339,12 +2369,32 @@ void yhs_accept_websocket(yhsRequest *re,const char *protocol)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-YHS_EXTERN int yhs_select_websocket(yhsRequest *re,int *can_read,int *can_write)
+static void ensure_websocket_handshake_finished(yhsRequest *re)
 {
-	if(!select_socket(re->sock,0,can_read,can_write))
-		return 0;
+	assert(re->type==RT_WEBSOCKET);
 
-	return 1;
+	if(re->state==RS_HEADER)
+	{
+		ensure_header_finished(re);
+
+		flush_write_buf(re);
+
+		re->wbuf.flush_fn=&flush_websocket_frame;
+		re->ws.state=WSS_OPEN;
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+yhsBool yhs_is_websocket_open(yhsRequest *re)
+{
+	ensure_websocket_handshake_finished(re);
+
+	if(re->type==RT_WEBSOCKET&&re->ws.state==WSS_OPEN)
+		return 1;
+
+	return 0;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2370,13 +2420,13 @@ static int recv_websocket_bytes(yhsRequest *re,void *buf,int buf_size,const char
 		if(n==-1)
 		{
 			YHS_SOCKET_ERR(msg);
-			close_connection(re);
+			close_connection_forcibly(re,__FUNCTION__);
 			return -1;
 		}
 		else if(n==0)
 		{
 			YHS_ERR("endpoint closed web socket connection prematurely");
-			close_connection(re);
+			close_connection_forcibly(re,__FUNCTION__);
 			return 0;
 		}
 
@@ -2469,46 +2519,43 @@ static int recv_websocket_frame_header(yhsRequest *re,WebSocketFrameHeader *fh)
 	return 1;
 
 bad:
-	close_connection(re);
+	close_connection_forcibly(re,__FUNCTION__);
 	return -1;
 }
 
-static void send_unbuffered_close_frame(yhsRequest *re)
+enum DoControlFramesMode
 {
-// 	static const char CLOSE_PAYLOAD[]="close connection";
-// 	static const size_t CLOSE_PAYLOAD_SIZE=sizeof CLOSE_PAYLOAD-1;
+	DCFM_POLL_OR_READ_DATA,
+	DCFM_BLOCK_AND_READ_DATA,
+	DCFM_WAIT_FOR_CLOSE,
+};
+typedef enum DoControlFramesMode DoControlFramesMode;
 
-	assert(re->type==RT_WEBSOCKET);
-
-	YHS_INFO_MSG("%s.\n",__FUNCTION__);
-
-	send_unbuffered_frame(re,WSO_CLOSE,1,0,0);//CLOSE_PAYLOAD,CLOSE_PAYLOAD_SIZE);
-}
-
-static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_data_frame,int block)
+static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_data_frame,DoControlFramesMode mode)
 {
 	uint8_t payload[125];
 	int rr;
 
-	YHS_INFO_MSG("%s\n",__FUNCTION__);
+
+	//YHS_INFO_MSG("%s\n",__FUNCTION__);
 
 	for(;;)
 	{
-		if(!block)
+		if(mode==DCFM_POLL_OR_READ_DATA)
 		{
 			int is_data_waiting;
 
 			//YHS_INFO_MSG("    select_socket.\n");
 			if(!select_socket(re->sock,0,&is_data_waiting,0))
 			{
-				YHS_INFO_MSG("    (bad)\n");
+				//YHS_INFO_MSG("    (bad)\n");
 				goto bad;
 			}
 
 			// if there's no data waiting, leave in the WSRS_NO_FRAME state.
 			if(!is_data_waiting)
 			{
-				YHS_INFO_MSG("    (no data waiting. not got data frame.)\n");
+				//YHS_INFO_MSG("    (no data waiting. not got data frame.)\n");
 				*got_data_frame=0;
 				return 1;
 			}
@@ -2519,18 +2566,33 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 		rr=recv_websocket_frame_header(re,fh);
 		if(rr<=0)
 		{
-			YHS_INFO_MSG("        (bad; rr=%d)\n",rr);
-			return 0;
+			//YHS_INFO_MSG("        (bad; rr=%d)\n",rr);
+			goto bad;
 		}
 
-		// all done, if it's a data frame.
-		YHS_INFO_MSG("    (opcode=%d; fin=%d; len=%d).\n",fh->opcode,fh->fin,fh->len);
+		// data frame?
+		YHS_INFO_MSG("%s: got frame: opcode=%d, fin=%d, len=%d.\n",__FUNCTION__,fh->opcode,fh->fin,fh->len);
 		if(!(fh->opcode&8))
 		{
-			// ok - data frame.
-			YHS_INFO_MSG("    (got data frame.).\n",fh->opcode);
-			*got_data_frame=1;
-			return 1;
+			if(mode==DCFM_WAIT_FOR_CLOSE)
+			{
+				// discard frame.
+				//
+				// should really check the frame for validity, but the code is
+				// just not structured to make that at all convenient.
+				rr=recv_websocket_bytes(re,0,fh->len,"recv data to discard while awaiting close");
+				if(rr<=0)
+					goto bad;
+
+				continue;
+			}
+			else
+			{
+				// ok - data frame.
+				//YHS_INFO_MSG("    (got data frame.).\n",fh->opcode);
+				*got_data_frame=1;
+				return 1;
+			}
 		}
 
 		// control frames may not be fragmented.
@@ -2550,7 +2612,7 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 		// retrieve payload.
 		rr=recv_websocket_bytes(re,payload,(int)fh->len,"recv web socket control frame payload");
 		if(rr<=0)
-			return 0;
+			goto bad;
 
 		// do whatever.
 		switch(fh->opcode)
@@ -2569,8 +2631,17 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 
 		case WSO_CLOSE:
 			{
-				send_unbuffered_close_frame(re);
-				close_connection(re);
+				YHS_INFO_MSG("%s: received CLOSE frame.\n",__FUNCTION__);
+
+				if(re->ws.state==WSS_OPEN)
+				{
+					send_unbuffered_frame(re,WSO_CLOSE,1,0,0);
+
+					re->ws.state=WSS_CLOSING;
+				}
+
+				close_connection_cleanly(re);
+
 				*got_data_frame=0;
 			}
 			return 1;
@@ -2578,73 +2649,68 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 	}
 
 bad:
-	close_connection(re);
+	close_connection_forcibly(re,__FUNCTION__);
 	return 0;
 }
 
-static void ensure_websocket_handshake_finished(yhsRequest *re)
-{
-	assert(re->type==RT_WEBSOCKET);
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
 
-	if(re->state==RS_HEADER)
-	{
-		ensure_header_finished(re);
-
-		re->state=RS_HEADER;//*bleargh*
-		flush_write_buf(re);
-		re->state=RS_DATA;//*bleargh*
-	}
-}
-
-int yhs_begin_recv_websocket_frame(yhsRequest *re,int *is_text)
+static int begin_recv_websocket_frame(yhsRequest *re,int *is_text)
 {
 	int got_data_frame;
 
-	ensure_websocket_handshake_finished(re);
-
-	assert(re->type==RT_WEBSOCKET);
-	assert(re->ws.recv_state==WSRS_NONE);
-
-	if(!do_control_frames(re,&re->ws.recv_fh,&got_data_frame,0))//0=don't block
-		return 0;//
+	if(!do_control_frames(re,&re->ws.recv.fh,&got_data_frame,DCFM_POLL_OR_READ_DATA))
+		return 0;
 
 	if(!got_data_frame)
 		return 0;
 
-	if(re->ws.recv_fh.opcode==WSO_TEXT)
+	if(re->ws.recv.fh.opcode==WSO_TEXT)
 	{
 		if(is_text)
 			*is_text=1;
 	}
-	else if(re->ws.recv_fh.opcode==WSO_BINARY)
+	else if(re->ws.recv.fh.opcode==WSO_BINARY)
 	{
 		if(is_text)
 			*is_text=0;
 	}
 	else
 	{
-		assert(0);
-		//discard_data_frame(re);
-
+		close_connection_forcibly(re,__FUNCTION__);
 		return 0;
 	}
 
-	re->ws.recv_state=WSRS_RECV;
-	re->ws.recv_is_fragmented=!re->ws.recv_fh.fin;
-	re->ws.recv_offset=0;
+	re->ws.recv.state=WSRS_RECV;
+	re->ws.recv.is_fragmented=!re->ws.recv.fh.fin;
+	re->ws.recv.offset=0;
 
 	return 1;
 }
 
+int yhs_begin_recv_websocket_frame(yhsRequest *re,int *is_text)
+{
+	ensure_websocket_handshake_finished(re);
+
+	if(!yhs_is_websocket_open(re))
+		return 0;
+
+	return begin_recv_websocket_frame(re,is_text);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 void yhs_end_recv_websocket_frame(yhsRequest *re)
 {
-	if(re->ws.recv_state!=WSRS_NONE)
+	if(re->ws.recv.state!=WSRS_NONE)
 	{
 		// there's some data hanging around, so just discard it.
 		for(;;)
 		{
 			size_t n;
-			int good=yhs_recv(re,0,1,&n);
+			int good=yhs_recv_websocket_data(re,0,1,&n);
 			if(!good)
 				return;
 
@@ -2652,25 +2718,19 @@ void yhs_end_recv_websocket_frame(yhsRequest *re)
 				break;
 		}
 
-		assert(re->ws.recv_state==WSRS_NONE);
+		assert(re->ws.recv.state==WSRS_DONE);
 	}
 }
 
-int yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n)
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static int recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *n)
 {
 	//int result=-1;
 	int rr;
 	char *dest;
 	int dest_size;
-
-	if(re->sock==INVALID_SOCKET)
-	{
-		// must have been closed in do_control_frames.
-
-		return 0;
-	}
-
-	ensure_websocket_handshake_finished(re);
 
 	assert(buf_size<=INT_MAX);
 
@@ -2680,68 +2740,22 @@ int yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n)
 	// loop on incoming packets.
 	for(;;)
 	{
-		switch(re->ws.recv_state)
+		switch(re->ws.recv.state)
 		{
 		default:
 		case WSRS_NONE:
-			{
-				int got_data_frame;
-				if(!do_control_frames(re,&re->ws.recv_fh,&got_data_frame,1))//1=block
-					return 0;
-
-				if(!got_data_frame)
-					return 0;
-
-				re->ws.recv_state=WSRS_FRAME;
-			}
-			break;
-
-		case WSRS_FRAME:
-			{
-				assert(!(re->ws.recv_fh.opcode&8));
-
-				// data.
-				switch(re->ws.recv_fh.opcode)
-				{
-				case WSO_CONTINUATION:
-					if(!re->ws.recv_is_fragmented)
-					{
-						YHS_ERR("received unexpected continuation frame");
-						goto bad;
-					}
-
-					re->ws.recv_state=WSRS_RECV;
-					re->ws.recv_offset=0;
-					break;
-
-				case WSO_TEXT:
-				case WSO_BINARY:
-					if(re->ws.recv_is_fragmented)
-					{
-						YHS_ERR("received data frame while processing fragmented frame");
-						goto bad;
-					}
-
-					re->ws.recv_is_text=re->ws.recv_fh.opcode==WSO_TEXT;
-					re->ws.recv_is_fragmented=!re->ws.recv_fh.fin;
-					//re->ws.first_fh=re->ws.recv_fh;// TODO: this isn't very useful.
-
-					re->ws.recv_offset=0;
-					re->ws.recv_state=WSRS_RECV;
-					break;
-				}
-			}
+			assert(0);
 			break;
 
 		case WSRS_RECV:
 			{
 				int num_to_recv;
 
-				assert(re->ws.recv_fh.opcode==WSO_CONTINUATION||re->ws.recv_fh.opcode==WSO_TEXT||re->ws.recv_fh.opcode==WSO_BINARY);
+				assert(re->ws.recv.fh.opcode==WSO_CONTINUATION||re->ws.recv.fh.opcode==WSO_TEXT||re->ws.recv.fh.opcode==WSO_BINARY);
 
 				// how many bytes to recv?
 				{
-					int num_left=re->ws.recv_fh.len-re->ws.recv_offset;
+					int num_left=re->ws.recv.fh.len-re->ws.recv.offset;
 
 					num_to_recv=dest_size;
 					if(num_to_recv>num_left)
@@ -2755,21 +2769,21 @@ int yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n)
 				{
 					rr=recv_websocket_bytes(re,dest,num_to_recv,"recv web socket data frame payload");
 					if(rr<=0)
-						return 0;
+						goto bad;
 				}
 
 				// unmask
-				if(re->ws.recv_fh.mask)
+				if(re->ws.recv.fh.mask)
 				{
 					int i;
 
 					for(i=0;i<rr;++i)
-						dest[i]^=re->ws.recv_fh.masking_key[(re->ws.recv_offset+i)&3];
+						dest[i]^=re->ws.recv.fh.masking_key[(re->ws.recv.offset+i)&3];
 				}
 
 				// adjust frame length.
-				re->ws.recv_offset+=rr;
-				assert(re->ws.recv_offset<=re->ws.recv_fh.len);
+				re->ws.recv.offset+=rr;
+				assert(re->ws.recv.offset<=re->ws.recv.fh.len);
 
 				// bump bufferstuff.
 				if(dest)
@@ -2778,10 +2792,24 @@ int yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n)
 				assert(dest_size>=rr);
 				dest_size-=rr;
 
-				// if frame is finished, set up state for the next one.
-				if(re->ws.recv_offset==re->ws.recv_fh.len)
+				// if frame is finished, set up state for the next one, if any.
+				if(re->ws.recv.offset==re->ws.recv.fh.len)
 				{
-					re->ws.recv_state=WSRS_NONE;
+					if(!re->ws.recv.is_fragmented)
+					{
+						// done - no fragments.
+						re->ws.recv.state=WSRS_DONE;
+					}
+					else if(re->ws.recv.fh.fin)
+					{
+						// done - all fragments received.
+						re->ws.recv.state=WSRS_DONE;
+					}
+					else
+					{
+						// more fragments to come, presumably.
+						re->ws.recv.state=WSRS_NEXT_FRAGMENT;
+					}
 
 					*n=dest-(char *)buf;
 					return 1;
@@ -2797,12 +2825,82 @@ int yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n)
 				// go round again...
 			}
 			break;
+
+		case WSRS_NEXT_FRAGMENT:
+			{
+				int got_data_frame;
+				if(!do_control_frames(re,&re->ws.recv.fh,&got_data_frame,DCFM_BLOCK_AND_READ_DATA))
+					goto bad;
+
+				if(!got_data_frame)
+					return 0;
+
+				if(re->ws.recv.fh.opcode!=WSO_CONTINUATION)
+				{
+					YHS_ERR("received data frame while processing fragmented frame");
+					goto bad;
+				}
+
+				re->ws.recv.state=WSRS_RECV;
+				re->ws.recv.offset=0;
+			}
+			break;
+
+		case WSRS_DONE:
+			{
+				*n=0;
+				return 1;
+			}
+			break;
 		}
 	}
 
 bad:
-	close_connection(re);
+	close_connection_forcibly(re,__FUNCTION__);
 	return 0;
+}
+
+int yhs_recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *n)
+{
+	ensure_websocket_handshake_finished(re);
+
+	if(!yhs_is_websocket_open(re))
+	{
+		// must have been closed in do_control_frames.
+
+		return 0;
+	}
+
+	return recv_websocket_data(re,buf,buf_size,n);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static void do_websocket_closing_handshake(yhsRequest *re)
+{
+	assert(re->type==RT_WEBSOCKET);
+
+	YHS_INFO_MSG("%s: ws.state is %d.\n",__FUNCTION__,(int)re->ws.state);
+
+	if(re->ws.state==WSS_OPEN)
+	{
+		int got_data_frame;
+
+		YHS_INFO_MSG("%s: send unbuffered CLOSE frame.\n",__FUNCTION__);
+
+		send_unbuffered_frame(re,WSO_CLOSE,1,0,0);
+
+		re->ws.state=WSS_CLOSING;
+
+		// just poll repeatedly, dropping data frames, until the connection dies
+        // or do_control_frame returns without a data frame ready, indicating a
+        // close was received.
+		YHS_INFO_MSG("%s: wait for CLOSE frame.\n",__FUNCTION__);
+		do_control_frames(re,&re->ws.recv.fh,&got_data_frame,DCFM_WAIT_FOR_CLOSE);
+	}
+
+	re->ws.state=WSS_CLOSED;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2816,11 +2914,11 @@ void yhs_begin_send_websocket_frame(yhsRequest *re,int is_text)
 
 	//flush_write_buf(re);
 
-	assert(re->ws.send_state==WSSS_NONE);
-	re->ws.send_state=WSSS_SEND;
+	assert(re->ws.send.state==WSSS_NONE);
+	re->ws.send.state=WSSS_SEND;
 
-	re->ws.send_opcode=is_text?WSO_TEXT:WSO_BINARY;
-	re->ws.send_fin=0;
+	re->ws.send.opcode=is_text?WSO_TEXT:WSO_BINARY;
+	re->ws.send.fin=0;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2829,13 +2927,13 @@ void yhs_begin_send_websocket_frame(yhsRequest *re,int is_text)
 void yhs_end_send_websocket_frame(yhsRequest *re)
 {
 	assert(re->type==RT_WEBSOCKET);
-	assert(re->ws.send_state==WSSS_SEND);
+	assert(re->ws.send.state==WSSS_SEND);
 
-	re->ws.send_fin=1;
+	re->ws.send.fin=1;
 
 	flush_write_buf(re);
 
-	re->ws.send_state=WSSS_NONE;
+	re->ws.send.state=WSSS_NONE;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2921,7 +3019,7 @@ void yhs_end_deferred_response(yhsRequest **re_ptr)
 
 	*re_ptr=re->next_deferred_in_chain;
 
-	close_connection(re);
+	close_connection_cleanly(re);
 
 	assert(re->flags&RF_DEFERRED);
 

@@ -200,7 +200,8 @@ YHS_EXTERN void yhs_begin_data_response(yhsRequest *req,const char *type);
 //
 // - Response data is automatically discarded when processing a HEAD request.
 //
-// - There is no difference between text and data, except for the API.
+// - There is no difference between "text" and "data", except for the API. In
+//   particular, newline translation is not performed.
 YHS_EXTERN void yhs_textf(yhsRequest *req,const char *fmt,...) YHS_PRINTF_LIKE(2,3);
 YHS_EXTERN void yhs_textv(yhsRequest *req,const char *fmt,va_list v);
 YHS_EXTERN void yhs_text(yhsRequest *req,const char *text);
@@ -356,46 +357,32 @@ YHS_EXTERN void yhs_see_other_response(yhsRequest *req,const char *destination);
 //
 YHS_EXTERN void yhs_accept_websocket(yhsRequest *re,const char *protocol);
 
-//
-YHS_EXTERN int yhs_select_websocket(yhsRequest *re,int *can_read,int *can_write);
+// if there was an error, the web socket is closed.
+YHS_EXTERN yhsBool yhs_is_websocket_open(yhsRequest *re);
 
-// Receive web socket data.
-//
-// IN
-//
-// re - the response object
-//
-// buf,buf_size - pointer to and size of buffer to receive data
-//
-// fin - if non-NULL, on success (i.e., return >0), *fin will be set to true if
-//       the read finished due to reaching the end of the frame, or false
-//       otherwise.
-//
-// is_text - if non-NULL, on success (i.e., return >0), *is_text will be set to
-//           true if the data was a text frame, or false if was a binary frame.
-//
-// OUT
-//
-// int - recv-style return value. If >0, number of bytes actually read (may be
-//       less than buf_size if the frame was smaller). If ==0, connection was
-//       closed cleanly; if <0, connection was closed due to error.
-//
-// NOTES
-//
-// - if fin is NULL, it's hard to tell whether there's more data to come.
-//
-// - the text/binary distinction is not expected to be important at recv time
-//   (at least, not in C/C++), which is why you get it alongside the data rather
-//   than before it.
-//
-// - it's quite safe to pass the same pointer for is_text each time and only
-//   check it once fin becomes set - the result will be accurate.
-//YHS_EXTERN int yhs_recv_websocket(yhsRequest *re,void *buf,size_t buf_size,int *fin,int *is_text);
-
+// the recv succeeds if there is a frame waiting to be received. if the recv
+// succeeds, use yhs_recv_websocket_data to get the actual data, then use
+// end_recv_websocket_frame to finish off receiving it.
 YHS_EXTERN yhsBool yhs_begin_recv_websocket_frame(yhsRequest *re,int *is_text);
 YHS_EXTERN void yhs_end_recv_websocket_frame(yhsRequest *re);
-YHS_EXTERN yhsBool yhs_recv(yhsRequest *re,void *buf,size_t buf_size,size_t *n);
 
+// receives up to buf_size bytes, storing them at buf.
+//
+// returns 1 on success. either bytes were received (and *n is the number of
+// bytes received), or the end of the frame was reached (and *n is set to zero).
+// if bytes were received, you can't tell that the end of the frame was reached
+// other than by trying again.
+//
+// returns 0 on failure.
+YHS_EXTERN yhsBool yhs_recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *n);
+
+// send web socket data.
+//
+// between the begin and end call, use the various yhs_text/yhs_data functions
+// to send data. (even yhs_html_text works.) the output is added to the frame,
+// and off it goes.
+//
+// yhs will fragment the frame at its discretion.
 YHS_EXTERN void yhs_begin_send_websocket_frame(yhsRequest *re,int is_text);
 YHS_EXTERN void yhs_end_send_websocket_frame(yhsRequest *re);
 

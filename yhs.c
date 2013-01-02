@@ -1438,6 +1438,12 @@ static void flush_data(yhsRequest *re)
 
 static void flush_websocket_frame(yhsRequest *re)
 {
+	if(re->ws.send.opcode==WSO_CONTINUATION&&re->wbuf.data_size==0)
+	{
+		// don't bother sending anything in this case.
+		return;
+	}
+
 	if(send_unbuffered_frame(re,re->ws.send.opcode,re->ws.send.fin,re->wbuf.data,re->wbuf.data_size))
 	{
 		// if another packet is going to get sent, it will be a

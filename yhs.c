@@ -2657,10 +2657,12 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 			goto bad;
 
 		case WSO_PING:
+			YHS_INFO_MSG("%s: received PING (%d bytes payload). Sending PONG.\n",__FUNCTION__,fh->len);
 			send_unbuffered_frame(re,WSO_PONG,1,payload,(size_t)fh->len);
 			break;
 
 		case WSO_PONG:
+			YHS_INFO_MSG("%s: received PONG. Ignoring.\n",__FUNCTION__);
 			// ignore pongs.
 			break;
 

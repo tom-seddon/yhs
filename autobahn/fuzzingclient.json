@@ -1,18 +1,18 @@
 
 {
-   "options": {"failByDrop": false},
-   "outdir": "./reports/servers",
+    "options": {"failByDrop": false},
+    "outdir": "./reports/servers",
 
-   "servers": [
-                  {
-                     "agent": "AutobahnPython",
-                     "url": "ws://127.0.0.1:35000/ws_echo/",
-                     "options": {"version": 18}
-                  }
-               ],
+    "servers": [
+        {
+            "agent": "AutobahnPython",
+            "url": "ws://127.0.0.1:35000/ws_echo/",
+            "options": {"version": 18}
+        }
+    ],
 
-    "cases": ["1.*","2.*","3.*","4.*","5.*"],
+    "cases": ["1.*","2.*","3.*","4.*","5.*","6.*"],
     
-   "exclude-cases": [],
-   "exclude-agent-cases": {}
+    "exclude-cases": [],
+    "exclude-agent-cases": {}
 }

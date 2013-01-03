@@ -540,6 +540,9 @@ struct WebSocketRecvData
 	int is_text;
 	int is_fragmented;
 	int offset;
+	int utf8_count;
+	int utf8_left;
+	uint32_t utf8_char;
 	WebSocketFrameHeader fh;
 };
 typedef struct WebSocketRecvData WebSocketRecvData;
@@ -2704,15 +2707,9 @@ static int begin_recv_websocket_frame(yhsRequest *re,int *is_text)
 		return 0;
 
 	if(re->ws.recv.fh.opcode==WSO_TEXT)
-	{
-		if(is_text)
-			*is_text=1;
-	}
+		re->ws.recv.is_text=1;
 	else if(re->ws.recv.fh.opcode==WSO_BINARY)
-	{
-		if(is_text)
-			*is_text=0;
-	}
+		re->ws.recv.is_text=0;
 	else
 	{
  		close_connection_forcibly(re,__FUNCTION__);
@@ -2722,6 +2719,13 @@ static int begin_recv_websocket_frame(yhsRequest *re,int *is_text)
 	re->ws.recv.state=WSRS_RECV;
 	re->ws.recv.is_fragmented=!re->ws.recv.fh.fin;
 	re->ws.recv.offset=0;
+
+	re->ws.recv.utf8_char=0;
+	re->ws.recv.utf8_count=0;
+	re->ws.recv.utf8_left=0;
+
+	if(is_text)
+		*is_text=re->ws.recv.is_text;
 
 	return 1;
 }
@@ -2746,8 +2750,9 @@ void yhs_end_recv_websocket_frame(yhsRequest *re)
 		// there's some data hanging around, so just discard it.
 		for(;;)
 		{
+			char tmp;
 			size_t n;
-			int good=yhs_recv_websocket_data(re,0,1,&n);
+			int good=yhs_recv_websocket_data(re,&tmp,1,&n);
 			if(!good)
 				return;
 
@@ -2766,12 +2771,13 @@ static int recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *
 {
 	//int result=-1;
 	int rr;
-	char *dest;
+	uint8_t *dest;
 	int dest_size;
 
 	assert(buf_size<=INT_MAX);
+	assert(buf);
 
-	dest=(char *)buf;
+	dest=(uint8_t *)buf;
 	dest_size=(int)buf_size;
 
 	// loop on incoming packets.
@@ -2818,6 +2824,142 @@ static int recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *
 						dest[i]^=re->ws.recv.fh.masking_key[(re->ws.recv.offset+i)&3];
 				}
 
+				// validate UTF-8
+				if(re->ws.recv.is_text)
+				{
+					int i;
+
+					for(i=0;i<rr;++i)
+					{
+						//printf("i=%d: dest[i]=%d (0x%X); utf8_count=%d; utf8_left=%d; utf8_char=%d (0x%X).\n",i,dest[i],dest[i],re->ws.recv.utf8_count,re->ws.recv.utf8_left,re->ws.recv.utf8_char,re->ws.recv.utf8_char);
+
+						if(re->ws.recv.utf8_left==0)
+						{
+							re->ws.recv.utf8_char=0;
+
+							if((dest[i]&0x80)==0)
+							{
+								// <pre>
+								//   7   6   5   4   3   2   1   0
+								// +---+---+---+---+---+---+---+---+
+								// | 0 |         value             |
+								// +---+---+---+---+---+---+---+---+
+								re->ws.recv.utf8_count=1;
+								//re->ws.recv.utf8_char=dest[i]&0x7F;
+
+								// no validation is required in this case.
+								//
+								// all 7-bit values are valid.
+							}
+							else if((dest[i]>>5)==6)
+							{
+								// <pre>
+								//   7   6   5   4   3   2   1   0
+								// +---+---+---+---+---+---+---+---+
+								// | 1   1   0 |       value       |
+								// +---+---+---+---+---+---+---+---+
+								re->ws.recv.utf8_count=2;
+								re->ws.recv.utf8_char=dest[i]&0x1F;
+							}
+							else if((dest[i]>>4)==14)
+							{
+								// <pre>
+								//   7   6   5   4   3   2   1   0
+								// +---+---+---+---+---+---+---+---+
+								// | 1   1   1   0 |     value     |
+								// +---+---+---+---+---+---+---+---+
+								re->ws.recv.utf8_count=3;
+								re->ws.recv.utf8_char=dest[i]&0x0F;
+							}
+							else if((dest[i]>>3)==30)
+							{
+								// <pre>
+								//   7   6   5   4   3   2   1   0
+								// +---+---+---+---+---+---+---+---+
+								// | 1   1   1   1   0 |   value   |
+								// +---+---+---+---+---+---+---+---+
+								re->ws.recv.utf8_count=4;
+								re->ws.recv.utf8_char=dest[i]&7;
+							}
+							else
+							{
+								YHS_ERR("received bad UTF-8 byte 1");
+								goto bad;
+							}
+
+							re->ws.recv.utf8_left=re->ws.recv.utf8_count-1;
+						}
+						else
+						{
+							// <pre>
+							//   7   6   5   4   3   2   1   0
+							// +---+---+---+---+---+---+---+---+
+							// | 1   0 |       value           |
+							// +---+---+---+---+---+---+---+---+
+							if((dest[i]>>6)==2)
+							{
+								re->ws.recv.utf8_char<<=6;
+								re->ws.recv.utf8_char|=dest[i]&63;
+							}
+							else
+							{
+								YHS_ERR("received bad UTF-8 byte 2+");
+								goto bad;
+							}
+							
+							--re->ws.recv.utf8_left;
+
+							if(re->ws.recv.utf8_left==0)
+							{
+								// Char. number range  |        UTF-8 octet sequence
+								//    (hexadecimal)    |              (binary)
+								// --------------------+---------------------------------------------
+								// 0000 0000-0000 007F | 0xxxxxxx
+								// 0000 0080-0000 07FF | 110xxxxx 10xxxxxx
+								// 0000 0800-0000 FFFF | 1110xxxx 10xxxxxx 10xxxxxx
+								// 0001 0000-0010 FFFF | 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+
+								if(re->ws.recv.utf8_count==2)
+								{
+									assert(re->ws.recv.utf8_char<=0x7FF);
+									if(re->ws.recv.utf8_char<0x80)
+									{
+										YHS_ERR("received overlong 2-byte UTF-8 sequence");
+										goto bad;
+									}
+								}
+								else if(re->ws.recv.utf8_count==3)
+								{
+									assert(re->ws.recv.utf8_char<=0xFFFF);
+									if(re->ws.recv.utf8_char<0x800)
+									{
+										YHS_ERR("received overlong 3-byte UTF-8 sequence");
+										goto bad;
+									}
+									else if(re->ws.recv.utf8_char>=0xD800&&re->ws.recv.utf8_char<=0xDFFF)
+									{
+										YHS_ERR("received UTF-16 surrogate");
+										goto bad;
+									}
+								}
+								else if(re->ws.recv.utf8_count==4)
+								{
+									if(re->ws.recv.utf8_char<0x10000)
+									{
+										YHS_ERR("received overlong 4-byte UTF-8 sequence");
+										goto bad;
+									}
+									else if(re->ws.recv.utf8_char>0x10FFFF)
+									{
+										YHS_ERR("received non-Unicode char");
+										goto bad;
+									}
+								}
+							}
+						}
+					}
+				}
+
 				// adjust frame length.
 				re->ws.recv.offset+=rr;
 				assert(re->ws.recv.offset<=re->ws.recv.fh.len);
@@ -2832,30 +2974,35 @@ static int recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *
 				// if frame is finished, set up state for the next one, if any.
 				if(re->ws.recv.offset==re->ws.recv.fh.len)
 				{
-					if(!re->ws.recv.is_fragmented)
+					if(!re->ws.recv.is_fragmented||re->ws.recv.fh.fin)
 					{
-						// done - no fragments.
+						// done - no fragments, or all fragments received.
+
+						if(re->ws.recv.is_text)
+						{
+							if(re->ws.recv.utf8_left!=0)
+							{
+								YHS_ERR("received truncated UTF-8 char");
+								goto bad;
+							}
+						}
+
 						re->ws.recv.state=WSRS_DONE;
-					}
-					else if(re->ws.recv.fh.fin)
-					{
-						// done - all fragments received.
-						re->ws.recv.state=WSRS_DONE;
+
+						*n=dest-(uint8_t *)buf;
+						return 1;
 					}
 					else
 					{
 						// more fragments to come, presumably.
 						re->ws.recv.state=WSRS_NEXT_FRAGMENT;
 					}
-
-					*n=dest-(char *)buf;
-					return 1;
 				}
 
 				// if buffer is full, done, and stay in this state.
 				if(dest_size==0)
 				{
-					*n=dest-(char *)buf;
+					*n=dest-(uint8_t *)buf;
 					return 1;
 				}
 

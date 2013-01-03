@@ -194,8 +194,11 @@ enum
 //#define YHS_INFO_MSG(...) (printf(__VA_ARGS__),(void)0)
 //#define YHS_ERR_MSG(...) (fprintf(stderr,__VA_ARGS__),(void)0)
 
-#define YHS_DEBUG_MSG(...) (print_message(stdout,__VA_ARGS__))
+#define YHS_DEBUG_MSG(...) ((void)0)
+//#define YHS_DEBUG_MSG(...) (print_message(stdout,__VA_ARGS__))
+
 #define YHS_INFO_MSG(...) (print_message(stdout,__VA_ARGS__))
+
 #define YHS_ERR_MSG(...) (print_message(stderr,__VA_ARGS__))
 
 // Memory allocation wrappers.
@@ -2580,7 +2583,7 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 		}
 
 		// data frame?
-		YHS_INFO_MSG("%s: got frame: opcode=%d, fin=%d, len=%d.\n",__FUNCTION__,fh->opcode,fh->fin,fh->len);
+		YHS_DEBUG_MSG("%s: got frame: opcode=%d, fin=%d, len=%d.\n",__FUNCTION__,fh->opcode,fh->fin,fh->len);
 		if(!(fh->opcode&8))
 		{
 			switch(fh->opcode)

@@ -991,7 +991,7 @@ static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *req
         if(*request_size==buf_size)
         {
             // Too much data in request header.
-            YHS_ERR_MSG("Request too large.");
+            YHS_ERR("Request too large.");
             break;
         }
         
@@ -2460,7 +2460,7 @@ static int recv_websocket_frame_header(yhsRequest *re,WebSocketFrameHeader *fh)
 	fh->mask=!!(header[1]&0x80);
 	fh->len=header[1]&0x7F;
 
-	YHS_INFO_MSG("recv_websocket_frame_header: (opcode=%d; fin=%d; mask=%d; len=%d).\n",fh->opcode,fh->fin,fh->mask,fh->len);
+	//YHS_INFO_MSG("recv_websocket_frame_header: (opcode=%d; fin=%d; mask=%d; len=%d).\n",fh->opcode,fh->fin,fh->mask,fh->len);
 
 	// (in)sanity checks
 	if((header[0]&(0x40|0x20|0x10))!=0)
@@ -2495,7 +2495,7 @@ static int recv_websocket_frame_header(yhsRequest *re,WebSocketFrameHeader *fh)
 		}
 
 		fh->len=(int)len;
-		YHS_INFO_MSG("64-bit: %d\n",fh->len);
+		//YHS_INFO_MSG("64-bit: %d\n",fh->len);
 	}
 	else if(fh->len==126)
 	{
@@ -2507,11 +2507,11 @@ static int recv_websocket_frame_header(yhsRequest *re,WebSocketFrameHeader *fh)
 		fh->len=(buf[0]<<8)|(buf[1]<<0);
 
 
-		YHS_INFO_MSG("16-bit: %d\n",fh->len);
+		//YHS_INFO_MSG("16-bit: %d\n",fh->len);
 	}
 	else
 	{
-		YHS_INFO_MSG("8-bit: %d\n",fh->len);
+		//YHS_INFO_MSG("8-bit: %d\n",fh->len);
 	}
 
 	// Read mask.

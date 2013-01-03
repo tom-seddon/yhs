@@ -60,6 +60,7 @@ typedef int SOCKET;
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <windows.h>
+#include <malloc.h>
 
 typedef unsigned __int64 uint64_t;
 typedef unsigned __int32 uint32_t;
@@ -1371,7 +1372,7 @@ static int send_unbuffered_frame(yhsRequest *re,WebSocketOpcode opcode,int fin,c
 		assert((opcode&~0x0F)==0);
 
 		if(fin)
-			opcode|=0x80;
+			opcode=(WebSocketOpcode)(opcode|0x80);
 
 		h[i++]=(uint8_t)opcode;
 	}

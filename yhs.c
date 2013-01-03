@@ -139,9 +139,6 @@ typedef int socklen_t;
 // - The PNG writing is pretty basic. It could be ten times smarter, and
 //   it would still be dumb as rocks.
 //
-// - Support HEAD. Should be easy enough. Could be made transparent to the
-//   request handler by discarding the response data.
-//
 // - Handle "Transfer-Encoding: chunked"? Does anything send this? At the
 //   very least, send some kind of error if a chunked request is received.
 //
@@ -153,6 +150,9 @@ typedef int socklen_t;
 //
 // DONE
 // ----
+//
+// - Support HEAD. Should be easy enough. Could be made transparent to the
+//   request handler by discarding the response data.
 //
 // - Probably want some way of deferring responses, so they can be
 //   serviced later during the main update loop. (Would just put the

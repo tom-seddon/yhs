@@ -15,6 +15,7 @@
 #include <windows.h>
 #include <shlwapi.h>
 #include <direct.h>
+#include <conio.h>
 
 #endif
 
@@ -37,9 +38,7 @@
 #include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+#include <time.h>
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -281,9 +280,12 @@ static void HandleTerminate(yhsRequest *re)
 	g_quit=true;
 }
 
+static std::vector<unsigned char> g_payload;
+
 static void HandleWSEcho(yhsRequest *re)
 {
-	std::vector<unsigned char> payload;
+	size_t num_bytes=0;
+	clock_t begin_clock=clock();
 
 	yhs_accept_websocket(re,0);
 
@@ -292,59 +294,70 @@ static void HandleWSEcho(yhsRequest *re)
 		int is_text;
 		if(yhs_begin_recv_websocket_frame(re,&is_text))
 		{
+			g_payload.clear();
+
 			for(;;)
 			{
-				const int CHUNK_SIZE=4096;
-				size_t old_size=payload.size(),n;
-				payload.resize(payload.size()+CHUNK_SIZE);
+				char buf[4096];
 
-				if(!yhs_recv_websocket_data(re,&payload[old_size],CHUNK_SIZE,&n))
+				size_t n;
+				if(!yhs_recv_websocket_data(re,buf,sizeof buf,&n))
 					return;
-
-				payload.resize(old_size+n);
 
 				if(n==0)
 					break;
+				
+				g_payload.insert(g_payload.end(),buf,buf+n);
 			}
 
-			printf("got %u bytes.\n",(unsigned)payload.size());
+			//printf("got %u bytes.\n",(unsigned)payload.size());
 
 			yhs_end_recv_websocket_frame(re);
 
 			yhs_begin_send_websocket_frame(re,is_text);
 
-			if(!payload.empty())
-				yhs_data(re,&payload[0],payload.size());
+			if(!g_payload.empty())
+				yhs_data(re,&g_payload[0],g_payload.size());
 
 			yhs_end_send_websocket_frame(re);
 
-			break;
+			num_bytes+=g_payload.size();
+		}
+	}
+
+	clock_t end_clock=clock();
+
+	printf("%s: %u bytes in %.2f sec\n",__FUNCTION__,(unsigned)num_bytes,(end_clock-begin_clock)/(double)CLOCKS_PER_SEC);
+}
+
+#ifdef WIN32
+
+static void WaitForKey()
+{
+	if(IsDebuggerPresent())
+	{
+		if(!g_quit)
+		{
+			fprintf(stderr,"press enter to exit.\n");
+			getchar();
 		}
 	}
 }
-
-#ifdef WIN32
-static void WaitForKey()
-{
-    if(IsDebuggerPresent())
-    {
-        fprintf(stderr,"press enter to exit.\n");
-        getchar();
-    }
-}
 #endif
 
-int main()
+int main(int argc,char *argv[])
 {
 #ifdef WIN32
     atexit(&WaitForKey);
-    
+
     WSADATA wd;
     if(WSAStartup(MAKEWORD(2,2),&wd)!=0)
     {
         fprintf(stderr,"FATAL: failed to initialize Windows Sockets.\n");
         return EXIT_FAILURE;
     }
+
+	printf("Press Esc to finish.\n");
 #endif
 
 #ifdef _MSC_VER
@@ -392,8 +405,10 @@ int main()
     yhs_set_handler_description("form with deferred response",yhs_add_to_toc(yhs_add_res_path_handler(server,"/form.html",&HandleFormHTML,(void *)1)));
     yhs_set_valid_methods(YHS_METHOD_POST,yhs_add_res_path_handler(server,"/status",&HandleStatus,0));
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/terminate",&HandleTerminate,0));
-	yhs_add_to_toc(yhs_add_res_path_handler(server,"/files/",&yhs_file_server_handler,(void *)"./demo_files"));
 	yhs_set_valid_methods(YHS_METHOD_WEBSOCKET,yhs_add_res_path_handler(server,"/ws_echo/",&HandleWSEcho,0));
+
+	if(argc>1)
+		yhs_add_to_toc(yhs_add_res_path_handler(server,"/files/",&yhs_file_server_handler,argv[1]));
 
     while(!g_quit)
     {
@@ -401,6 +416,16 @@ int main()
         
 #ifdef WIN32
         Sleep(10);
+
+		if(_kbhit())
+		{
+			if(_getch()==27)
+			{
+				g_quit=true;
+				break;
+			}
+		}
+
 #else
         usleep(10000);
 #endif

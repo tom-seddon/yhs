@@ -870,6 +870,7 @@ void yhs_delete_server(yhsServer *server)
     {
         yhsHandler *next=h->next;
         
+		FREE(h->description);
         FREE(h->res_path);
         FREE(h);
         

@@ -9,11 +9,12 @@ You specify the paths of "files" and "folders" you want to make
 available, and callbacks to be called when they are requested, and the
 yocto HTTP server handles the rest. When your callback is called, you
 can use convenient stdio-style functions to send text or binary data
-to the browser, or transmit image data in PNG data.
+to the browser, or transmit image data.
 
-The yocto HTTP server doesn't create any threads, doesn't access the
-filing system by default, doesn't allocate memory all the time, and
-comes as only 2 source files, for ease of integration.
+Of course, if you just want some files serving from folders on disk,
+the yocto HTTP server will do that.
+
+Also, WebSockets.
 
 The yocto HTTP server has been written for ease of embedding and ease
 of use, under the assumption that it will be used as a development and
@@ -80,9 +81,9 @@ callback.
 Paths not ending in =/= are considered files, and their callback will
 be called when a request is made for that exact path.
 
-Paths ending in =/= are considered folders, and will be called for any
-file in that folder (at whatever depth), if there isn't a
-closer-matching folder or file handler for it.
+Paths ending in =/= are considered folders, meaning the callback will
+be called for any file in that folder (at whatever depth), if there
+isn't a closer-matching folder or file handler for it.
 
 If there's no handler added for the root folder =/=, =GET= requests
 for =/= will be responded to automatically with a contents page.
@@ -122,9 +123,9 @@ appropriate action will be taken automatically. If your callback
 doesn't provide any response, the server will automatically provide a
 404 page.
 
-Respond to a =HEAD= request in exactly the same way as a =GET=
-request. The server checks for =HEAD= specially, and will discard any
-response body in that case, leaving just the headers.
+(You can respond to a =HEAD= request in exactly the same way as a
+=GET= request. The server checks for =HEAD= specially, and will
+discard any response body in that case, leaving just the headers.)
 
 *** Data response
 
@@ -315,6 +316,106 @@ everything on one line:
 
 : yhs_add_to_toc(yhs_set_handler_description("test handler",yhs_add_res_path_handler(server,"/test",&test_func,NULL)));
 
+** WebSockets
+
+yhs supports WebSockets as per RFC 6455
+(http://tools.ietf.org/html/rfc6455).
+
+yhs passes the AutobahnTestsuite Websocket tests
+(http://autobahn.ws/testsuite), suggesting that it actually works.
+
+*** WebSocket connections
+
+To set up a potential WebSocket connection, use
+=yhs_set_valid_methods= to add =YHS_METHOD_WEBSOCKET= as a valid
+method for the handler.
+
+: yhs_set_valid_methods(YHS_METHOD_WEBSOCKET,yhs_add_res_path_handler(server,"/ws",&ws_func,NULL));
+
+In the handler, =yhs_get_method= will return =YHS_METHOD_WEBSOCKET= if
+there is a WebSocket connection attempt being made. Use
+=yhs_accept_websocket= to approve it, and put the connection into
+WebSocket mode.
+
+Once the connection is in WebSocket mode, call =yhs_is_websocket_open=
+to see if the connection is still open. The WebSocket MUST (their
+words, not mine!) be closed at the slightest provocation, so it might
+become closed unexpectedly.
+
+WebSocket connections are expected to be deferred, but there's no
+obligation.
+
+*** Receiving WebSocket data
+
+To receive data on the WebSocket, or try to, use
+=yhs_begin_recv_websocket_frame=. =yhs_begin_recv_websocket_frame= is
+non-blocking, and will return 1 if there is data waiting, and
+optionally set a variable to indicate whether the incoming frame is
+text or binary.
+
+Once =yhs_begin_recv_websocket_frame= returns 1, the data is ready for
+reading, and you are committed to reading it. Use
+=yhs_recv_websocket_data= to do this. =yhs_recv_websocket_data= will
+attempt to fill a buffer with incoming data, stopping when the buffer
+is full, the entire frame has been read, or something else happened
+(some kind of error, or WebSocket closed).
+
+(yhs will automatically handle continuation frames; you can't detect
+the fragmentation.)
+
+Once you've read the data, call =yhs_end_recv_websocket_frame= to
+stop. If there is unread data in the frame, it will be silently
+discarded.
+
+: int is_text;
+: if(yhs_begin_recv_websocket_frame(re,&is_text)) {
+:     char buf[1000];
+:     size_t n;
+:     if(yhs_recv_websocket_data(re,buf,sizeof buf,&n)) {
+:         /* stuff */
+:     }
+: }
+
+=yhs_recv_websocket_data= will always fill the entire buffer if
+there's data to fill it with, and will block if required. If the read
+succeeded, and the size read is less than the size of the buffer, all
+the data in the frame has been read.
+
+*** Receiving a WebSocket text frame
+
+If the incoming data is text, yhs still allows you to treat it as a
+sequence of bytes for reading purposes. This means you can read
+partial UTF-8 byte sequences (e.g., if you're receiving 1 byte at a
+time), leaving you with invalid intermediate UTF-8. So take care.
+
+Additionally, the UTF-8 data is validated char-by-char rather than
+byte-by-byte, so you can receive parts of obviously invalid UTF-8 byte
+sequences as well, if yhs has yet to see the entire char to validate
+it. So... take care with that, too.
+
+All in all, if reading a text frame, you're advised to read the whole
+thing in before doing anything with it. 
+
+*** Sending WebSocket data
+
+To start sending a frame of data, use
+=yhs_begin_send_websocket_frame=, supplying a flag indicating whether
+the frame is text or binary.
+
+Once the frame is started, use the various data sending functions
+(=yhs_text*=, =yhs_data*=) to send data. (yhs will fragment the frame
+at its discretion, if necessary.) Then call
+=yhs_end_send_websocket_frame= once done.
+
+If sending a text frame, it must be valid UTF-8, but yhs doesn't
+check, under the assumption that the client will.
+
+*** Closing the WebSocket
+
+If the request isn't deferred, the WebSocket will be closed when the
+handler returns; if the request is deferred, use
+=yhs_end_deferred_response= to close it.
+
 * Tweakables
 
 There are some tweakable macros and constants near the top of the .c
@@ -383,7 +484,20 @@ By default, debug and info messages go to =stdout=, and errors go to
   conveniently; instead of requiring repeated yhs_find_header_field
   calls to find them all, it should just join them on receipt (see
   section 4.2) and provide some API for accessing comma-separated
-  lists as a list as well as the string.
+  lists as a list as well as the string. C strings :(
+
+- No support for selecting the WebSocket protocol
+
+- Add mutex as appropriate, so deferred connections can be serviced on
+  other threads (caller is responsible for thread safety of the chain
+  but yhs will have to do the next_deferred/prev_deferred list)
+
+- Add some kind of context pointer to a yhsRequest when deferring, so
+  the caller can store some action data or something? (Making it
+  easier to have all of them in one big list, so there's only one
+  mutex for the caller to maintain?)
+
+- Is "yocto" still appropriate?
 
 * Other embeddable web serving options
 

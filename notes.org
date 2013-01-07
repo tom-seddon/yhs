@@ -1,0 +1,4 @@
+* autobahn
+
+: C:\Python27\scripts\wstest --mode=fuzzingclient
+

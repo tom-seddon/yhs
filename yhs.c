@@ -37,6 +37,7 @@
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <dirent.h>
+#include <arpa/inet.h>
 
 #define STRICMP(X,Y) (strcasecmp((X),(Y)))
 #define STRNICMP(X,Y,N) (strncasecmp((X),(Y),(N)))
@@ -90,6 +91,7 @@ typedef int socklen_t;
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+#include <limits.h>
 #include <ctype.h>
 #include <assert.h>
 #include <stdlib.h>
@@ -941,6 +943,7 @@ static int accept_request(SOCKET listen_sock,SOCKET *accepted_sock)
     struct sockaddr_in client_addr;
     socklen_t client_addr_size=sizeof client_addr;
     int is_accept_waiting;
+	char client_addr_str[100];
     
     // Maybe accept request?
     if(!select_socket(listen_sock,0,&is_accept_waiting,0))
@@ -960,14 +963,9 @@ static int accept_request(SOCKET listen_sock,SOCKET *accepted_sock)
         YHS_SOCKET_ERR("Accept incoming connection on listen socket.");
         return 0;
     }
-
-	YHS_INFO_MSG("%s: connection from %d.%d.%d.%d port %d\n",
-		__FUNCTION__,
-		client_addr.sin_addr.S_un.S_un_b.s_b1,
-		client_addr.sin_addr.S_un.S_un_b.s_b2,
-		client_addr.sin_addr.S_un.S_un_b.s_b3,
-		client_addr.sin_addr.S_un.S_un_b.s_b4,
-		ntohs(client_addr.sin_port));
+	
+	inet_ntop(AF_INET,&client_addr,client_addr_str,sizeof client_addr_str);
+	YHS_INFO_MSG("%s: connection from %s port %d\n",__FUNCTION__,client_addr_str,ntohs(client_addr.sin_port));
     
     return 1;
 }
@@ -1543,13 +1541,16 @@ static void close_connection_cleanly(yhsRequest *re)
 
 	switch(re->type)
 	{
-	case RT_IMAGE:
-		assert(re->png.y==re->png.h);
-		break;
-
-	case RT_WEBSOCKET:
-		do_websocket_closing_handshake(re);
-		break;
+		default:
+			break;
+			
+		case RT_IMAGE:
+			assert(re->png.y==re->png.h);
+			break;
+			
+		case RT_WEBSOCKET:
+			do_websocket_closing_handshake(re);
+			break;
 	}
 
 	close_connection_forcibly(re,0);

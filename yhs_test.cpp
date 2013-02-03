@@ -330,6 +330,19 @@ static void HandleWSEcho(yhsRequest *re)
 	printf("%s: %u bytes in %.2f sec\n",__FUNCTION__,(unsigned)num_bytes,(end_clock-begin_clock)/(double)CLOCKS_PER_SEC);
 }
 
+static void HandleTestsEchoHeaderField(yhsRequest *re)
+{
+	yhs_begin_data_response(re,"text/plain");
+	
+	const char *field=yhs_get_path_handler_relative(re);
+	
+	const char *value=0;
+	while((value=yhs_find_header_field(re,field,value)))
+		yhs_textf(re,"%s=%s\n",field,value);
+}
+
+
+
 #ifdef WIN32
 
 static void WaitForKey()
@@ -406,6 +419,7 @@ int main(int argc,char *argv[])
     yhs_set_valid_methods(YHS_METHOD_POST,yhs_add_res_path_handler(server,"/status",&HandleStatus,0));
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/terminate",&HandleTerminate,0));
 	yhs_set_valid_methods(YHS_METHOD_WEBSOCKET,yhs_add_res_path_handler(server,"/ws_echo/",&HandleWSEcho,0));
+	yhs_add_res_path_handler(server,"/tests/echo_header_field/",&HandleTestsEchoHeaderField,0);
 
 	if(argc>1)
 		yhs_add_to_toc(yhs_add_res_path_handler(server,"/files/",&yhs_file_server_handler,argv[1]));

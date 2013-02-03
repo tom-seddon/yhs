@@ -1897,6 +1897,8 @@ static int accept_new_connections(yhsServer *server)
 		re.server=server;
 		re.hdr.data=header_data_buf;
 
+		re.wbuf.flush_fn=&flush_data;
+
 		// read header and 0-terminate so that it ends with a single \r\n.
 		if(!read_request_header(re.sock,re.hdr.data,MAX_REQUEST_SIZE,&re.hdr.data_size))
 		{
@@ -1907,8 +1909,6 @@ static int accept_new_connections(yhsServer *server)
 		YHS_DEBUG_MSG("REQUEST(RAW): %u/%u bytes:\n---8<---\n",(unsigned)re.hdr.data_size,sizeof header_data_buf);
 		debug_dump_string(re.hdr.data,-1);
 		YHS_DEBUG_MSG("\n---8<---\n");
-
-		re.wbuf.flush_fn=&flush_data;
 
 		if(!process_request_header(re.hdr.data,&re.hdr.method_pos,&re.hdr.path_pos,&re.hdr.first_field_pos))
 		{

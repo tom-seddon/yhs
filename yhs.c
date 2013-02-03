@@ -964,6 +964,17 @@ static int accept_request(SOCKET listen_sock,SOCKET *accepted_sock)
         return 0;
     }
 	
+	// Suppress SIGPIPE. I am quite capable of checking return values
+	// each time. (Well... I think.)
+	{
+		int value=1;
+		if(setsockopt(*accepted_sock,SOL_SOCKET,SO_NOSIGPIPE,&value,sizeof value)<0)
+		{
+			YHS_SOCKET_ERR("Set SO_NOSIGPIPE on accepted socket.");
+			return 0;
+		}
+	}
+	
 	inet_ntop(AF_INET,&client_addr,client_addr_str,sizeof client_addr_str);
 	YHS_INFO_MSG("%s: connection from %s port %d\n",__FUNCTION__,client_addr_str,ntohs(client_addr.sin_port));
     

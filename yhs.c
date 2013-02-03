@@ -1509,7 +1509,8 @@ static void reset_request(yhsRequest *re)
 
 static void close_connection_forcibly(yhsRequest *re,const char *reason)
 {
-	YHS_INFO_MSG("%s: reason: \"%s\"\n",__FUNCTION__,reason);
+	if(reason)
+		YHS_INFO_MSG("%s: reason: \"%s\"\n",__FUNCTION__,reason);
 
 	if(re->type==RT_WEBSOCKET)
 		re->ws.state=WSS_CLOSED;

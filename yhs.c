@@ -1460,6 +1460,15 @@ static void flush_websocket_frame(yhsRequest *re)
 	if(re->ws.send.opcode==WSO_CONTINUATION&&re->wbuf.data_size==0)
 	{
 		// don't bother sending anything in this case.
+		//
+		// (the check comes before a byte is written! - so if the frame is
+		// an exact multiple of the write buffer in size, it'll be
+		// filled but unwritten when the end frame function is called and
+		// so FIN will be set appropriately and there will be some non-zero
+		// amount of stuff to write. there's no situation where
+		// an empty FIN packet needs to be sent, since yhs doesn't support
+		// sending empty frames (they don't appear to be useful). DO NOT
+		// RETHINK THIS... you'll only get it wrong again.)
 		return;
 	}
 

@@ -559,6 +559,30 @@ YHS_EXTERN const char *yhs_get_path_handler_relative(yhsRequest *re);
 // Getting content data
 //
 
+// Get content details.
+//
+// IN
+//
+// req - request object
+//
+// type - pointer to const char * to fill in with pointer to MIME type of
+//        content (this could be NULL if the client didn't say)
+//
+// length - pointer to int to fill in with length of content
+//
+// OUT
+//
+// bool - 1 if there is some content (and *type and *length are filled in),
+//        0 if not.
+//
+// NOTES
+//
+// - type and length may be NULL, if you don't care.
+//
+// - this function doesn't do anything magic. It just calls
+//   yhs_find_header_field and validates the result.
+YHS_EXTERN yhsBool yhs_get_content_details(yhsRequest *req,const char **type,int *length);
+
 // Get bytes of content data.
 //
 // IN

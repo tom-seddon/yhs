@@ -3253,6 +3253,33 @@ void yhs_end_deferred_response(yhsRequest **re_ptr)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+yhsBool yhs_get_content_details(yhsRequest *re,const char **type,int *length)
+{
+	yhsBool got=0;
+	const char *t=yhs_find_header_field(re,"Content-Type",0);
+	const char *l_str=yhs_find_header_field(re,"Content-Length",0);
+	int l=0;
+	
+	if(l_str)
+		l=atoi(l_str);
+
+	if(l>0)
+	{
+		if(type)
+			*type=t;
+		
+		if(length)
+			*length=l;
+		
+		got=1;
+	}
+	
+	return got;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 int yhs_get_content(yhsRequest *re,int num,char *buf)
 {
     int num_recvd=0;

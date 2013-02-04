@@ -256,9 +256,12 @@ The expected code is along these lines:
 
 ** Content
 
-If the request has content associated with it (use
-=yhs_find_header_field= and look for the =Content-Type= and
-=Content-Length= fields), use =yhs_get_content= to retrieve it.
+If the request has content associated with it, use =yhs_get_content=
+to retrieve it. Check for associated content by looking for the
+=Content-Length= header field by hand, or use
+=yhs_get_content_details= to do the check. =yhs_get_content_details=
+will retrieve =Content-Length= as an =int=, and find any
+=Content-Type= field supplied too.
 
 You can retrieve the content all in one go, or in parts.
 

@@ -23,6 +23,13 @@ class TestFail(Exception):
         self.got=got
         self.expected=expected
 
+    def write(self,
+              f,
+              prefix):
+        f.write(prefix+"    What: %s\n"%self.what)
+        f.write(prefix+"Expected: ``%s'' (%s)\n"%(repr(self.expected),type(self.expected)))
+        f.write(prefix+"     Got: ``%s'' (%s)\n"%(repr(self.got),type(self.got)))
+
 ##########################################################################
 ##########################################################################
 
@@ -132,8 +139,9 @@ def main():
     statuses=[]
 
     for test in tests:
-        print "%s..."%test.DESC
-        
+        print "%s"%test.DESC
+
+        sys.stdout.write("    Construct")
         obj=test()
 
         obj.conn=httplib.HTTPConnection(host,
@@ -141,18 +149,25 @@ def main():
                                         strict)
 
         try:
+            sys.stdout.write(" Connect")
             obj.conn.connect()
 
+            sys.stdout.write(" Setup")
             obj.setup()
 
             #obj.conn.send()
 
+            sys.stdout.write(" GetResponse")
             obj.resp=obj.conn.getresponse()
 
+            sys.stdout.write(" Check")
             obj.check()
+
+            sys.stdout.write("\n")
             
         except TestFail,e:
             print "    Failed."
+            e.write(sys.stdout,"    ")
             statuses.append(e)
         else:
             print "    Passed."

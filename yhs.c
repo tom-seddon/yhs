@@ -307,7 +307,7 @@ static void stb__sha1(const uint8_t *chunk, uint32_t h[5])
 	h[4] += e;
 }
 
-void sha1(uint8_t output[20], const void *buffer_a, uint32_t len)
+void yhs_sha1(unsigned char output[20], const void *buffer_a,unsigned len)
 {
 	unsigned char final_block[128];
 	uint32_t end_start, final_len, j;
@@ -1797,7 +1797,7 @@ static void make_ws_accept(char *accept,const char *key)
 	strcpy(nonce,key);
 	strcat(nonce,WEBSOCKET_MAGIC);
 
-	sha1(hash,nonce,strlen(nonce));
+	yhs_sha1(hash,nonce,strlen(nonce));
 	hash[20]=0;
 
 	for(i=0;i<7;++i)

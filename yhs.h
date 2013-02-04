@@ -67,6 +67,26 @@ typedef int yhsBool;
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+// Get SHA1 hash of a buffer.
+//
+// IN
+//
+// buffer,len - the buffer
+//
+// output - the 20 bytes to fill in with the SHA1.
+//
+// NOTES
+//
+// - SHA1 hashing is not really part of a web server, but web sockets
+//   uses it, and I needed something like it for my test program, so it
+//   sort of came along for the ride.
+//
+//   If you don't need it, don't call it.
+YHS_EXTERN void yhs_sha1(unsigned char output[20],const void *buffer,unsigned len);
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 // HTTP methods.
 //
 // These are used both as bitflags and individual values.

@@ -500,6 +500,9 @@ By default, debug and info messages go to =stdout=, and errors go to
   easier to have all of them in one big list, so there's only one
   mutex for the caller to maintain?)
 
+- =yhs_get_content= and =yhs_recv_websocket_data= should probably be
+  much more similar than they are.
+
 - Is "yocto" still appropriate?
 
 * Other embeddable web serving options

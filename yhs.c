@@ -2350,6 +2350,8 @@ void yhs_pixel(yhsRequest *re,int r,int g,int b,int a)
 
 void yhs_error_response(yhsRequest *re,const char *status_line)
 {
+	YHS_INFO_MSG("%s: %s\n",__FUNCTION__,status_line);
+	
 	header(re,RT_TEXT,status_line);
 	yhs_header_field(re,"Content-Type","text/html");
     
@@ -2552,10 +2554,26 @@ bad:
 	return -1;
 }
 
+// do_control_frames reads and processes control frames from the websocket
+// until a data frame is received or there's nothing left to do.
+
 enum DoControlFramesMode
 {
+	// keep processing control frames as long as some are available.
+	// if a data frame arrives, set *got_data_frame and return without
+	// error; if no data on web socket, reset *got_data_frame and return
+	// without error.
 	DCFM_POLL_OR_READ_DATA,
+	
+	// keep processing control frames as long as some are available. if
+	// no data on web socket, block. if a data frame is available, set
+	// *got_data_frame and return without error. (in BLOCK_AND_READ_DATA
+	// mode, do_control_frames will never return with *got_data_frame
+	// reset.)
 	DCFM_BLOCK_AND_READ_DATA,
+	
+	// spin, waiting for a CLOSE control frame. if data frames are
+	// received, they are discarded out of hand without being checked.
 	DCFM_WAIT_FOR_CLOSE,
 };
 typedef enum DoControlFramesMode DoControlFramesMode;

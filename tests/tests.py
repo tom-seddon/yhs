@@ -1,5 +1,8 @@
 #!/usr/bin/python
-import httplib,sys
+import httplib,sys,random,hashlib
+
+##########################################################################
+##########################################################################
 
 host="localhost"
 port=35000
@@ -91,12 +94,39 @@ class EchoMultipleHeaderField(Test):
 ##########################################################################
 ##########################################################################
 
+class HashContent(Test):
+    DESC="""Hash content."""
+
+    def __init__(self):
+        # a longer string would be nice, but python is just comically
+        # slow.
+        
+        self.data=""
+
+        for i in range(65536):
+            self.data+=chr(random.randint(0,255))
+
+        hasher=hashlib.new("sha1")
+        hasher.update(self.data)
+        self.hash=hasher.hexdigest().upper()
+
+    def setup(self):
+        self.conn.request("POST","/tests/hash_content",self.data)
+
+    def check(self):
+        self.check_status(200)
+        self.check_data(self.hash)
+        
+##########################################################################
+##########################################################################
+        
 def main():
     tests=[
         OversizedRequest,
         EchoSingleHeaderField,
         EchoContinuedHeaderField,
         EchoMultipleHeaderField,
+        HashContent,
     ]
 
     statuses=[]

@@ -341,6 +341,30 @@ static void HandleTestsEchoHeaderField(yhsRequest *re)
 		yhs_textf(re,"%s=%s\n",field,value);
 }
 
+static void HandleTestsHashContent(yhsRequest *re)
+{
+	const char *type;
+	int length;
+	if(yhs_get_content_details(re,&type,&length))
+	{
+		//printf("type=%s length=%d\n",type,length);
+		
+		//printf("reading...\n");
+		std::vector<char> data(length);
+		if(yhs_get_content(re,length,&data[0]))
+		{
+			//printf("done.\n");
+			
+			unsigned char sha1[20];
+			yhs_sha1(sha1,&data[0],data.size());
+			
+			yhs_begin_data_response(re,"text/plain");
+			
+			for(int i=0;i<20;++i)
+				yhs_textf(re,"%02X",sha1[i]);
+		}
+	}
+}
 
 
 #ifdef WIN32
@@ -420,6 +444,7 @@ int main(int argc,char *argv[])
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/terminate",&HandleTerminate,0));
 	yhs_set_valid_methods(YHS_METHOD_WEBSOCKET,yhs_add_res_path_handler(server,"/ws_echo/",&HandleWSEcho,0));
 	yhs_add_res_path_handler(server,"/tests/echo_header_field/",&HandleTestsEchoHeaderField,0);
+	yhs_set_valid_methods(YHS_METHOD_POST,yhs_add_res_path_handler(server,"/tests/hash_content",&HandleTestsHashContent,0));
 
 	if(argc>1)
 		yhs_add_to_toc(yhs_add_res_path_handler(server,"/files/",&yhs_file_server_handler,argv[1]));

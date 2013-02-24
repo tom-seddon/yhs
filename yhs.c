@@ -693,7 +693,7 @@ static void yhs_socket_err(yhsServer *server,const char *file,const char *functi
 		while(strlen(msg)>=0&&isspace(msg[strlen(msg)-1]))
 			msg[strlen(msg)-1]=0;
 
-		SERVER_ERR(server,"    %d - %s\n",err,msg);
+		SERVER_ERROR(server,"    %d - %s\n",err,msg);
 	}
 #else
 	SERVER_ERROR(server,"    %d - %s\n",err,strerror(err));
@@ -814,8 +814,8 @@ static void print_likely_urls(yhsServer *server)
         {
             SERVER_INFO(server,"    http://%s",computer_name);
             
-            if(port!=80)
-                SERVER_INFO(server,":%d",port);
+            if(server->port!=80)
+                SERVER_INFO(server,":%d",server->port);
             
             SERVER_INFO(server,"/\n");
         }
@@ -1017,6 +1017,8 @@ static int accept_request(yhsServer *server,SOCKET *accepted_sock)
         return 0;
     }
 	
+#ifndef _WIN32
+
 	// Suppress SIGPIPE. I am quite capable of checking return values
 	// each time. (Well... I think.)
 	{
@@ -1027,6 +1029,8 @@ static int accept_request(yhsServer *server,SOCKET *accepted_sock)
 			return 0;
 		}
 	}
+
+#endif//_WIN32
 	
 	inet_ntop(AF_INET,&client_addr.sin_addr,client_addr_str,sizeof client_addr_str);
 	SERVER_DEBUG(server,"%s: connection from %s port %d\n",__FUNCTION__,client_addr_str,ntohs(client_addr.sin_port));

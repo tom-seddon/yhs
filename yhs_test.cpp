@@ -337,7 +337,7 @@ static void HandleTestsEchoHeaderField(yhsRequest *re)
 	const char *field=yhs_get_path_handler_relative(re);
 	
 	const char *value=0;
-	while((value=yhs_find_header_field(re,field,value)))
+	while((value=yhs_find_header_field(re,field,value))!=0)
 		yhs_textf(re,"%s=%s\n",field,value);
 }
 

@@ -366,6 +366,16 @@ static void HandleTestsHashContent(yhsRequest *re)
 	}
 }
 
+static void Log(yhsLogCategory cat,const char *str,void *context)
+{
+	(void)context;
+
+	fputs(str,cat==YHS_LOG_ERROR?stderr:stdout);
+
+#ifdef _WIN32
+	OutputDebugStringA(str);
+#endif//_WIN32
+}
 
 #ifdef WIN32
 
@@ -419,6 +429,9 @@ int main(int argc,char *argv[])
     }
 
 	yhs_set_server_name(server,"Demo Server");
+
+	yhs_set_server_log_callback(server,&Log,0);
+	yhs_set_server_log_enabled(server,YHS_LOG_INFO,1);
     
     yhs_add_to_toc(yhs_add_res_path_handler(server,"/folder/",&HandleFolder,0));
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/file",&HandleFile,0));

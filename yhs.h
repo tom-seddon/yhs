@@ -191,6 +191,59 @@ YHS_EXTERN yhsBool yhs_update(yhsServer *server);
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 //
+// Server logging stuff
+//
+
+// Log categories.
+enum yhsLogCategory
+{
+	YHS_LOG_DEBUG,
+	YHS_LOG_INFO,
+	YHS_LOG_ERROR,
+	
+	YHS_LOG_ENDVALUE,
+};
+typedef enum yhsLogCategory yhsLogCategory;
+
+// Log handler function type.
+//
+// IN
+//
+// category - the log category
+//
+// message - the message to print
+//
+// context - value supplied to yhs_set_server_log_callback
+YHS_EXTERN typedef void (*yhsLogFn)(yhsLogCategory category,const char *message,void *context);
+
+// Set callback for log messages printed by the given server.
+//
+// IN
+//
+// server - server to set callback for.
+//
+// fn,context - yhsLogFn to call, and the context to call it with.
+//
+// NOTES
+//
+// - the default callback prints error messages to stderr, and info and
+//   debug messages to stdout.
+YHS_EXTERN void yhs_set_server_log_callback(yhsServer *server,yhsLogFn fn,void *context);
+
+// Enable or disable a given log type for the server.
+//
+// NOTES
+//
+// - initial states are:
+//
+//   - YHS_LOG_DEBUG - disabled
+//   - YHS_LOG_INFO - disabled
+//   - YHS_LOG_ERROR - enabled
+YHS_EXTERN void yhs_set_server_log_enabled(yhsServer *server,yhsLogCategory category,yhsBool enabled);
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+//
 // Response management
 //
 

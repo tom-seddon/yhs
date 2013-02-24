@@ -193,19 +193,6 @@ enum
 	MAX_PATH_SIZE=1000,
 };
 
-// Macro wrappers for info and error messages.
-
-//#define YHS_DEBUG_MSG(...) (printf(__VA_ARGS__),(void)0)
-//#define YHS_INFO_MSG(...) (printf(__VA_ARGS__),(void)0)
-//#define YHS_ERR_MSG(...) (fprintf(stderr,__VA_ARGS__),(void)0)
-
-#define YHS_DEBUG_MSG(...) ((void)0)
-//#define YHS_DEBUG_MSG(...) (print_message(stdout,__VA_ARGS__))
-
-#define YHS_INFO_MSG(...) (print_message(stdout,__VA_ARGS__))
-
-#define YHS_ERR_MSG(...) (print_message(stderr,__VA_ARGS__))
-
 // Memory allocation wrappers.
 
 #define MALLOC(SIZE) (malloc(SIZE))
@@ -598,8 +585,33 @@ struct yhsRequest
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+struct LogData
+{
+	yhsBool enabled[YHS_LOG_ENDVALUE];
+	yhsLogFn fn;
+	void *context;
+};
+typedef struct LogData LogData;
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+enum ServerState
+{
+	SS_NONE,
+	SS_RUNNING,
+	SS_ERROR,
+};
+typedef enum ServerState ServerState;
+
 struct yhsServer
 {
+	// port to open on
+	int port;
+	
+	//
+	ServerState state;
+	
     // socket that listens for incoming connections.
     SOCKET listen_sock;
     
@@ -608,12 +620,9 @@ struct yhsServer
 
 	// singly-linked.
 	yhsRequest *first_deferred;
+	
+	LogData log;
     
-//     // buffer for pending writes.
-//     char write_buf[WRITE_BUF_SIZE];
-//     size_t write_buf_data_size;
-// 	yhsRequest *write_buf_request;
-
     // server name
 	char name[MAX_SERVER_NAME_SIZE];
 };
@@ -621,23 +630,58 @@ struct yhsServer
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-#ifdef WIN32
-#define YHS_SOCKET_ERR(MSG) (yhs_socket_err(__FILE__,__FUNCTION__,__LINE__,WSAGetLastError(),(MSG)),(void)0)
-#else
-#define YHS_SOCKET_ERR(MSG) (yhs_socket_err(__FILE__,__FUNCTION__,__LINE__,errno,(MSG)),(void)0)
-#endif
+#define SERVER_DEBUG(SERVER_PTR,...) (SERVER_MESSAGE((SERVER_PTR),DEBUG,__VA_ARGS__))
+#define SERVER_INFO(SERVER_PTR,...) (SERVER_MESSAGE((SERVER_PTR),INFO,__VA_ARGS__))
+#define SERVER_ERROR(SERVER_PTR,...) (SERVER_MESSAGE((SERVER_PTR),ERROR,__VA_ARGS__))
 
-#define YHS_ERR(MSG) (yhs_err(__FILE__,__FUNCTION__,__LINE__,(MSG)),(void)0)
+#define SERVER_MESSAGE(SERVER_PTR,CAT,...) ((SERVER_PTR)->log.enabled[YHS_LOG_##CAT]?do_log(&(SERVER_PTR)->log,YHS_LOG_##CAT,__VA_ARGS__):(void)0)
 
-static void yhs_err(const char *file,const char *function,int line,const char *msg)
+static void do_log(LogData *log,yhsLogCategory cat,const char *fmt,...)
 {
-    YHS_ERR_MSG("YHS: Error:\n");
-    YHS_ERR_MSG("    %s(%d): %s: %s\n",file,line,function,msg);
+	char tmp[1000];
+	va_list v;
+	
+	if(!log->enabled[cat])
+		return;
+	
+	if(!log->fn)
+		return;
+	
+	va_start(v,fmt);
+	
+	vsnprintf(tmp,sizeof tmp,fmt,v);
+	tmp[sizeof tmp-1]=0;
+	
+	va_end(v);
+	
+	(*log->fn)(cat,tmp,log->context);
 }
 
-static void yhs_socket_err(const char *file,const char *function,int line,int err,const char *msg)
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+//#define YHS_ERROR(LOG_PTR,MSG) (yhs_err((LOG_PTR),__FILE__,__FUNCTION__,__LINE__,(MSG)),(void)0)
+
+static void yhs_err(yhsServer *server,const char *file,const char *function,int line,const char *msg)
 {
-	yhs_err(file,function,line,msg);
+    SERVER_ERROR(server,"YHS: Error:\n");
+    SERVER_ERROR(server,"    %s(%d): %s: %s\n",file,line,function,msg);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+#define SERVER_SOCKET_ERROR(SERVER_PTR,MSG) (yhs_socket_err((SERVER_PTR),__FILE__,__FUNCTION__,__LINE__,(MSG)),(void)0)
+
+static void yhs_socket_err(yhsServer *server,const char *file,const char *function,int line,const char *msg)
+{
+#ifdef WIN32
+	int err=WSAGetLastError();
+#else
+	int err=errno;
+#endif
+	
+	yhs_err(server,file,function,line,msg);
 
 #ifdef WIN32
 	{
@@ -648,10 +692,10 @@ static void yhs_socket_err(const char *file,const char *function,int line,int er
 		while(strlen(msg)>=0&&isspace(msg[strlen(msg)-1]))
 			msg[strlen(msg)-1]=0;
 
-		YHS_ERR_MSG("    %d - %s\n",err,msg);
+		SERVER_ERR(server,"    %d - %s\n",err,msg);
 	}
 #else
-	YHS_ERR_MSG("    %d - %s\n",err,strerror(err));
+	SERVER_ERROR(server,"    %d - %s\n",err,strerror(err));
 #endif
 }
 
@@ -694,7 +738,7 @@ static void yhs_socket_err(const char *file,const char *function,int line,int er
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-static SOCKET create_listen_socket(int port)
+static yhsBool create_listen_socket(yhsServer *server)
 {
     int good=0;
     const int reuse_addr=1;
@@ -703,13 +747,13 @@ static SOCKET create_listen_socket(int port)
     
     if(sock<0)
     {
-        YHS_SOCKET_ERR("Create listen socket.");
+		SERVER_ERROR(server,"Create listen socket.");
         goto done;
     }
     
     if(setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,(const char *)&reuse_addr,sizeof reuse_addr)<0)
     {
-        YHS_SOCKET_ERR("Set REUSEADDR.");
+        SERVER_ERROR(server,"Set REUSEADDR.");
         goto done;
     }
     
@@ -719,19 +763,19 @@ static SOCKET create_listen_socket(int port)
     listen_addr.sin_family=AF_INET;
     listen_addr.sin_addr.s_addr=htonl(INADDR_ANY);
     
-    assert(port>=0&&port<65536);
-    listen_addr.sin_port=htons((u_short)port);
+    assert(server->port>=0&&server->port<65536);
+    listen_addr.sin_port=htons((u_short)server->port);
     
     if(bind(sock,(struct sockaddr *)&listen_addr,sizeof(listen_addr))<0)
     {
-        YHS_SOCKET_ERR("Bind listen socket.");
+        SERVER_ERROR(server,"Bind listen socket.");
         goto done;
     }
     
     // Listen
     if(listen(sock,LISTEN_SOCKET_BACKLOG)<0)
     {
-        YHS_SOCKET_ERR("Set listen socket to listen mode.");
+        SERVER_ERROR(server,"Set listen socket to listen mode.");
         goto done;
     }
     
@@ -743,6 +787,8 @@ done:
         CLOSESOCKET(sock);
         sock=INVALID_SOCKET;
     }
+	
+	server->listen_sock=sock;
     
     return sock;
 }
@@ -750,10 +796,10 @@ done:
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-static void print_likely_urls(int port)
+static void print_likely_urls(yhsServer *server)
 {
-    YHS_INFO_MSG("YHS: Likely URLs for this system are:\n");
-    YHS_INFO_MSG("\n");
+    SERVER_INFO(server,"YHS: Likely URLs for this system are:\n");
+    SERVER_INFO(server,"\n");
     
 #ifdef WIN32
     
@@ -762,15 +808,15 @@ static void print_likely_urls(int port)
         DWORD computer_name_size=sizeof computer_name;
         
         if(!GetComputerNameExA(ComputerNameDnsHostname,computer_name,&computer_name_size))
-            YHS_INFO_MSG("YHS: Failed to get computer name.\n");
+            SERVER_INFO(server,"YHS: Failed to get computer name.\n");
         else
         {
-            YHS_INFO_MSG("    http://%s",computer_name);
+            SERVER_INFO(server,"    http://%s",computer_name);
             
             if(port!=80)
-                YHS_INFO_MSG(":%d",port);
+                SERVER_INFO(server,":%d",port);
             
-            YHS_INFO_MSG("/\n");
+            SERVER_INFO(server,"/\n");
         }
     }
     
@@ -780,7 +826,7 @@ static void print_likely_urls(int port)
         struct ifaddrs *interfaces;
         if(getifaddrs(&interfaces)<0)
         {
-            YHS_SOCKET_ERR("Get network interfaces.");
+            SERVER_INFO(server,"Get network interfaces.");
             return;
         }
         
@@ -795,19 +841,19 @@ static void print_likely_urls(int port)
                 if(addr==0x7F000001)
                     continue;//don't bother printing localhost.
                 
-                YHS_INFO_MSG("    http://%d.%d.%d.%d",(addr>>24)&0xFF,(addr>>16)&0xFF,(addr>>8)&0xFF,(addr>>0)&0xFF);
+                SERVER_INFO(server,"    http://%d.%d.%d.%d",(addr>>24)&0xFF,(addr>>16)&0xFF,(addr>>8)&0xFF,(addr>>0)&0xFF);
                 
-                if(port!=80)
-                    YHS_INFO_MSG(":%d",port);
+                if(server->port!=80)
+                    SERVER_INFO(server,":%d",server->port);
                 
-                YHS_INFO_MSG("/\n");
+                SERVER_INFO(server,"/\n");
             }
         }
         
         freeifaddrs(interfaces);
         interfaces=NULL;
         
-        YHS_INFO_MSG("\n");
+        SERVER_INFO(server,"\n");
     }
     
 #endif
@@ -816,36 +862,42 @@ static void print_likely_urls(int port)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+static void default_log_callback(yhsLogCategory category,const char *message,void *context)
+{
+	FILE *f;
+	
+	if(category==YHS_LOG_ERROR)
+		f=stderr;
+	else
+		f=stdout;
+	
+	fputs(message,f);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 yhsServer *yhs_new_server(int port)
 {
-    int good=0;
-    
     yhsServer *server=(yhsServer *)MALLOC(sizeof *server);
 
 	if(!server)
-		goto done;
+		return NULL;
 
     memset(server,0,sizeof *server);
     
     server->handlers.next=&server->handlers;
     server->handlers.prev=&server->handlers;
-    
-    server->listen_sock=create_listen_socket(port);
-    if(server->listen_sock<0)
-        goto done;
-    
-    print_likely_urls(port);
 	
+	server->listen_sock=INVALID_SOCKET;
+	
+	server->port=port;
+	
+	yhs_set_server_log_enabled(server,YHS_LOG_ERROR,1);
+	
+	yhs_set_server_log_callback(server,&default_log_callback,0);
+    
 	yhs_set_server_name(server,"yhs");
-    
-    good=1;
-    
-done:
-    if(!good)
-    {
-        yhs_delete_server(server);
-        server=NULL;
-    }
     
     return server;
 }
@@ -881,7 +933,7 @@ void yhs_delete_server(yhsServer *server)
         h=next;
     }
     
-    if(server->listen_sock>=0)
+    if(server->listen_sock!=INVALID_SOCKET)
         CLOSESOCKET(server->listen_sock);
     
     FREE(server);
@@ -938,7 +990,7 @@ static int select_socket(SOCKET sock,int num_seconds,int *is_readable,int *is_wr
 // Accepts request and stores header. *data_size is set to total data read,
 // maybe including part of the payload; *request_size points just after the
 // \r\n\r\n that terminates the request header.
-static int accept_request(SOCKET listen_sock,SOCKET *accepted_sock)
+static int accept_request(yhsServer *server,SOCKET *accepted_sock)
 {
     struct sockaddr_in client_addr;
     socklen_t client_addr_size=sizeof client_addr;
@@ -946,9 +998,9 @@ static int accept_request(SOCKET listen_sock,SOCKET *accepted_sock)
 	char client_addr_str[100];
     
     // Maybe accept request?
-    if(!select_socket(listen_sock,0,&is_accept_waiting,0))
+    if(!select_socket(server->listen_sock,0,&is_accept_waiting,0))
     {
-        YHS_SOCKET_ERR("Check listen socket readability.");
+        SERVER_SOCKET_ERROR(server,"Check listen socket readability.");
         // @TODO: Should close and re-open socket if this happens.
         return 0;
     }
@@ -957,10 +1009,10 @@ static int accept_request(SOCKET listen_sock,SOCKET *accepted_sock)
         return 0;//nobody waiting.
     
     // Accept socket.
-    *accepted_sock=accept(listen_sock,(struct sockaddr *)&client_addr,&client_addr_size);
+    *accepted_sock=accept(server->listen_sock,(struct sockaddr *)&client_addr,&client_addr_size);
     if(*accepted_sock<0)
     {
-        YHS_SOCKET_ERR("Accept incoming connection on listen socket.");
+        SERVER_SOCKET_ERROR(server,"Accept incoming connection on listen socket.");
         return 0;
     }
 	
@@ -970,18 +1022,18 @@ static int accept_request(SOCKET listen_sock,SOCKET *accepted_sock)
 		int value=1;
 		if(setsockopt(*accepted_sock,SOL_SOCKET,SO_NOSIGPIPE,&value,sizeof value)<0)
 		{
-			YHS_SOCKET_ERR("Set SO_NOSIGPIPE on accepted socket.");
+			SERVER_SOCKET_ERROR(server,"Set SO_NOSIGPIPE on accepted socket.");
 			return 0;
 		}
 	}
 	
 	inet_ntop(AF_INET,&client_addr,client_addr_str,sizeof client_addr_str);
-	YHS_INFO_MSG("%s: connection from %s port %d\n",__FUNCTION__,client_addr_str,ntohs(client_addr.sin_port));
+	SERVER_DEBUG(server,"%s: connection from %s port %d\n",__FUNCTION__,client_addr_str,ntohs(client_addr.sin_port));
     
     return 1;
 }
 
-static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *request_size)
+static int read_request_header(yhsServer *server,SOCKET sock,char *buf,size_t buf_size,size_t *request_size)
 {
     // Keep reading until the data ends with the \r\n\r\n that signifies the
     // end of the request, or there's no more buffer space.
@@ -995,7 +1047,7 @@ static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *req
         
         if(!select_socket(sock,10,&is_data_waiting,0))
         {
-            YHS_SOCKET_ERR("Check accepted socket readability.");
+            SERVER_SOCKET_ERROR(server,"Check accepted socket readability.");
             break;
         }
         
@@ -1003,14 +1055,14 @@ static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *req
         {
             // The polling timeout is deliberately set high; if there's no
             // data waiting in that time, the client must have given up.
-            YHS_SOCKET_ERR("Timed out waiting for client to send request.");
+            SERVER_SOCKET_ERROR(server,"Timed out waiting for client to send request.");
             break;
         }
         
         if(*request_size==buf_size)
         {
             // Too much data in request header.
-            YHS_ERR("Request too large.");
+            SERVER_ERROR(server,"Request too large.");
             break;
         }
         
@@ -1019,7 +1071,7 @@ static int read_request_header(SOCKET sock,char *buf,size_t buf_size,size_t *req
         {
             // Error, or client closed connection prematurely.
             if(n<0)
-                YHS_SOCKET_ERR("Read accepted socket.");
+                SERVER_SOCKET_ERROR(server,"Read accepted socket.");
             
             break;
         }
@@ -1356,7 +1408,7 @@ static int send_unbuffered_bytes(yhsRequest *re,const void *data,size_t num_byte
 		int n=send(re->sock,src,left,0);
 		if(n<=0)
 		{
-			YHS_SOCKET_ERR("write.");
+			SERVER_SOCKET_ERROR(re->server,"write.");
 			close_connection_forcibly(re,__FUNCTION__);
 			return 0;
 		}
@@ -1530,7 +1582,7 @@ static void reset_request(yhsRequest *re)
 static void close_connection_forcibly(yhsRequest *re,const char *reason)
 {
 	if(reason)
-		YHS_INFO_MSG("%s: reason: \"%s\"\n",__FUNCTION__,reason);
+		SERVER_DEBUG(re->server,"%s: reason: \"%s\"\n",__FUNCTION__,reason);
 
 	if(re->type==RT_WEBSOCKET)
 		re->ws.state=WSS_CLOSED;
@@ -1612,7 +1664,7 @@ static void send_response_byte(yhsRequest *re,uint8_t value)
 		send_byte(re,value);
 }
 
-static void debug_dump_string(const char *str,int max_len)
+static void debug_dump_string(yhsServer *server,const char *str,int max_len)
 {
     int i;
     
@@ -1621,23 +1673,23 @@ static void debug_dump_string(const char *str,int max_len)
         switch(str[i])
         {
         case '\n':
-            YHS_DEBUG_MSG("\\n");
+            SERVER_DEBUG(server,"\\n");
             break;
             
         case '\r':
-            YHS_DEBUG_MSG("\\r");
+            SERVER_DEBUG(server,"\\r");
             break;
             
         case '\t':
-            YHS_DEBUG_MSG("\\t");
+            SERVER_DEBUG(server,"\\t");
             break;
             
         case '"':
-            YHS_DEBUG_MSG("\\\"");
+            SERVER_DEBUG(server,"\\\"");
             break;
             
         default:
-            YHS_DEBUG_MSG("%c",str[i]);
+            SERVER_DEBUG(server,"%c",str[i]);
             break;
         }
     }
@@ -1896,7 +1948,7 @@ static int maybe_upgrade_to_websocket(yhsRequest *re)
 static int accept_new_connections(yhsServer *server)
 {
 	int any=0;
-
+	
 	for(;;)
 	{
 		// response gunk
@@ -1909,7 +1961,7 @@ static int accept_new_connections(yhsServer *server)
 
 		reset_request(&re);
 
-		if(!accept_request(server->listen_sock,&re.sock))
+		if(!accept_request(server,&re.sock))
 			break;
 
 		any=1;
@@ -1921,15 +1973,15 @@ static int accept_new_connections(yhsServer *server)
 		re.wbuf.flush_fn=&flush_data;
 
 		// read header and 0-terminate so that it ends with a single \r\n.
-		if(!read_request_header(re.sock,re.hdr.data,MAX_REQUEST_SIZE,&re.hdr.data_size))
+		if(!read_request_header(server,re.sock,re.hdr.data,MAX_REQUEST_SIZE,&re.hdr.data_size))
 		{
 			yhs_error_response(&re,"500 Internal Server Error");
 			goto done;
 		}
 
-		YHS_DEBUG_MSG("REQUEST(RAW): %u/%u bytes:\n---8<---\n",(unsigned)re.hdr.data_size,sizeof header_data_buf);
-		debug_dump_string(re.hdr.data,-1);
-		YHS_DEBUG_MSG("\n---8<---\n");
+		SERVER_DEBUG(server,"REQUEST(RAW): %u/%u bytes:\n---8<---\n",(unsigned)re.hdr.data_size,sizeof header_data_buf);
+		debug_dump_string(server,re.hdr.data,-1);
+		SERVER_DEBUG(server,"\n---8<---\n");
 
 		if(!process_request_header(re.hdr.data,&re.hdr.method_pos,&re.hdr.path_pos,&re.hdr.first_field_pos))
 		{
@@ -1940,8 +1992,8 @@ static int accept_new_connections(yhsServer *server)
 		path=yhs_get_path(&re);
 		method=yhs_get_method_str(&re);
 
-		YHS_INFO_MSG("REQUEST: Method: %s\n",method);
-		YHS_INFO_MSG("         Res Path: \"%s\"\n",path);
+		SERVER_DEBUG(server,"REQUEST: Method: %s\n",method);
+		SERVER_DEBUG(server,"         Res Path: \"%s\"\n",path);
 
 		if(strcmp(method,"GET")==0)
 		{
@@ -1974,12 +2026,12 @@ static int accept_new_connections(yhsServer *server)
 
 		if(re.handler)
 		{
-			YHS_INFO_MSG("         Handler: \"%s\"",re.handler->res_path);
+			SERVER_DEBUG(server,"         Handler: \"%s\"",re.handler->res_path);
 
 			if(re.handler->description)
-				YHS_INFO_MSG(" (%s)",re.handler->description);
+				SERVER_DEBUG(server," (%s)",re.handler->description);
 
-			YHS_INFO_MSG("\n");
+			SERVER_DEBUG(server,"\n");
 		}
 
 		if(!response_line)
@@ -2000,50 +2052,63 @@ done:
 	return any;
 }
 
-static int update_websockets(yhsServer *server)
-{
-	(void)server;
-
-	// TODO: this is probably not actually the right thing.
-
-// 	yhsRequest *re;
-// 
-// 	for(re=server->first_deferred;re;re=re->next_deferred)
-// 	{
-// 		int is_data_waiting;
-// 
-// 		if(re->type!=RT_WEBSOCKET)
-// 			continue;
-// 
-// 		if(!check_socket_readability(re->sock,0,&is_data_waiting))
-// 		{
-// 			YHS_SOCKET_ERR("websocket - check socket readability");
-// 			continue;
-// 		}
-// 
-// 		if(!is_data_waiting)
-// 			continue;
-// 
-// 
-// 	}
-
-	return 0;
-}
-
 int yhs_update(yhsServer *server)
 {
     int any=0;
-    
-    if(!server)
-        return 0;
-
-	if(accept_new_connections(server))
-		any=1;
-
-	if(update_websockets(server))
-		any=1;
-
+	
+	switch(server->state)
+	{
+		default:
+			assert(0);
+			break;
+			
+		case SS_NONE:
+		{
+			if(!create_listen_socket(server))
+				server->state=SS_ERROR;
+			else
+			{
+				print_likely_urls(server);
+				
+				server->state=SS_RUNNING;
+			}
+		}
+			break;
+			
+		case SS_RUNNING:
+		{
+			if(accept_new_connections(server))
+				any=1;
+		}
+			break;
+			
+		case SS_ERROR:
+		{
+			// erm...
+		}
+			break;
+	}
+	
     return any;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+void yhs_set_server_log_callback(yhsServer *server,yhsLogFn fn,void *context)
+{
+	server->log.fn=fn;
+	server->log.context=context;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+void yhs_set_server_log_enabled(yhsServer *server,yhsLogCategory category,yhsBool enabled)
+{
+	assert(category>=0&&category<YHS_LOG_ENDVALUE);
+	
+	server->log.enabled[category]=enabled;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -2359,7 +2424,7 @@ void yhs_pixel(yhsRequest *re,int r,int g,int b,int a)
 
 void yhs_error_response(yhsRequest *re,const char *status_line)
 {
-	YHS_INFO_MSG("%s: %s\n",__FUNCTION__,status_line);
+	SERVER_INFO(re->server,"%s: %s\n",__FUNCTION__,status_line);
 	
 	header(re,RT_TEXT,status_line);
 	yhs_header_field(re,"Content-Type","text/html");
@@ -2459,13 +2524,13 @@ static int recv_websocket_bytes(yhsRequest *re,void *buf,int buf_size,const char
 
 		if(n==-1)
 		{
-			YHS_SOCKET_ERR(msg);
+			SERVER_SOCKET_ERROR(re->server,msg);
 			close_connection_forcibly(re,__FUNCTION__);
 			return -1;
 		}
 		else if(n==0)
 		{
-			YHS_ERR("endpoint closed web socket connection prematurely");
+			SERVER_ERROR(re->server,"endpoint closed web socket connection prematurely");
 			close_connection_forcibly(re,__FUNCTION__);
 			return 0;
 		}
@@ -2494,12 +2559,12 @@ static int recv_websocket_frame_header(yhsRequest *re,WebSocketFrameHeader *fh)
 	fh->mask=!!(header[1]&0x80);
 	fh->len=header[1]&0x7F;
 
-	//YHS_INFO_MSG("recv_websocket_frame_header: (opcode=%d; fin=%d; mask=%d; len=%d).\n",fh->opcode,fh->fin,fh->mask,fh->len);
+	//SERVER_INFO(server,"recv_websocket_frame_header: (opcode=%d; fin=%d; mask=%d; len=%d).\n",fh->opcode,fh->fin,fh->mask,fh->len);
 
 	// (in)sanity checks
 	if((header[0]&(0x40|0x20|0x10))!=0)
 	{
-		YHS_ERR("received web socket frame with RSV1, RSV2 or RSV3 set");
+		SERVER_ERROR(re->server,"received web socket frame with RSV1, RSV2 or RSV3 set");
 		goto bad;
 	}
 
@@ -2507,7 +2572,7 @@ static int recv_websocket_frame_header(yhsRequest *re,WebSocketFrameHeader *fh)
 	{
 		// ``All frames sent from client to server have this bit set to
 		// 1.''
-		YHS_ERR("received unmasked web socket frame");
+		SERVER_ERROR(re->server,"received unmasked web socket frame");
 		goto bad;
 	}
 
@@ -2524,12 +2589,12 @@ static int recv_websocket_frame_header(yhsRequest *re,WebSocketFrameHeader *fh)
 
 		if(len>INT_MAX)
 		{
-			YHS_ERR("received unsupportedly large web socket frame");
+			SERVER_ERROR(re->server,"received unsupportedly large web socket frame");
 			goto bad;
 		}
 
 		fh->len=(int)len;
-		//YHS_INFO_MSG("64-bit: %d\n",fh->len);
+		//SERVER_INFO(server,"64-bit: %d\n",fh->len);
 	}
 	else if(fh->len==126)
 	{
@@ -2541,11 +2606,11 @@ static int recv_websocket_frame_header(yhsRequest *re,WebSocketFrameHeader *fh)
 		fh->len=(buf[0]<<8)|(buf[1]<<0);
 
 
-		//YHS_INFO_MSG("16-bit: %d\n",fh->len);
+		//SERVER_INFO(server,"16-bit: %d\n",fh->len);
 	}
 	else
 	{
-		//YHS_INFO_MSG("8-bit: %d\n",fh->len);
+		//SERVER_INFO(server,"8-bit: %d\n",fh->len);
 	}
 
 	// Read mask.
@@ -2593,7 +2658,7 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 	int rr;
 
 
-	//YHS_INFO_MSG("%s\n",__FUNCTION__);
+	//SERVER_INFO(re->server,"%s\n",__FUNCTION__);
 
 	for(;;)
 	{
@@ -2601,39 +2666,39 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 		{
 			int is_data_waiting;
 
-			//YHS_INFO_MSG("    select_socket.\n");
+			//SERVER_INFO(re->server,"    select_socket.\n");
 			if(!select_socket(re->sock,0,&is_data_waiting,0))
 			{
-				//YHS_INFO_MSG("    (bad)\n");
+				//SERVER_INFO(re->server,"    (bad)\n");
 				goto bad;
 			}
 
 			// if there's no data waiting, leave in the WSRS_NO_FRAME state.
 			if(!is_data_waiting)
 			{
-				//YHS_INFO_MSG("    (no data waiting. not got data frame.)\n");
+				//SERVER_INFO(re->server,"    (no data waiting. not got data frame.)\n");
 				*got_data_frame=0;
 				return 1;
 			}
 		}
 
 		// get incoming header.
-		//YHS_INFO_MSG("    recv_websocket_frame_header.\n");
+		//SERVER_INFO(re->server,"    recv_websocket_frame_header.\n");
 		rr=recv_websocket_frame_header(re,fh);
 		if(rr<=0)
 		{
-			//YHS_INFO_MSG("        (bad; rr=%d)\n",rr);
+			//SERVER_INFO(re->server,"        (bad; rr=%d)\n",rr);
 			goto bad;
 		}
 
 		// data frame?
-		YHS_DEBUG_MSG("%s: got frame: opcode=%d, fin=%d, len=%d.\n",__FUNCTION__,fh->opcode,fh->fin,fh->len);
+		SERVER_DEBUG(re->server,"%s: got frame: opcode=%d, fin=%d, len=%d.\n",__FUNCTION__,fh->opcode,fh->fin,fh->len);
 		if(!(fh->opcode&8))
 		{
 			switch(fh->opcode)
 			{
 			default:
-				YHS_ERR("received data frame with unknown opcode");
+				SERVER_ERROR(re->server,"received data frame with unknown opcode");
 				goto bad;
 
 			case WSO_CONTINUATION:
@@ -2662,7 +2727,7 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 			else
 			{
 				// ok - data frame.
-				//YHS_INFO_MSG("    (got data frame.).\n",fh->opcode);
+				//SERVER_INFO(server,"    (got data frame.).\n",fh->opcode);
 				*got_data_frame=1;
 				return 1;
 			}
@@ -2671,14 +2736,14 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 		// control frames may not be fragmented.
 		if(!fh->fin)
 		{
-			YHS_ERR("received fragmented web socket control frame");
+			SERVER_ERROR(re->server,"received fragmented web socket control frame");
 			goto bad;
 		}
 
 		// control frames must have an 8-bit size field.
 		if(fh->len>125)
 		{
-			YHS_ERR("received web socket control frame with large payload");
+			SERVER_ERROR(re->server,"received web socket control frame with large payload");
 			goto bad;
 		}
 
@@ -2703,22 +2768,22 @@ static int do_control_frames(yhsRequest *re,WebSocketFrameHeader *fh,int *got_da
 		switch(fh->opcode)
 		{
 		default:
-			YHS_ERR("received unknown web socket control frame");
+			SERVER_ERROR(re->server,"received unknown web socket control frame");
 			goto bad;
 
 		case WSO_PING:
-			YHS_INFO_MSG("%s: received PING (%d bytes payload). Sending PONG.\n",__FUNCTION__,fh->len);
+			SERVER_DEBUG(re->server,"%s: received PING (%d bytes payload). Sending PONG.\n",__FUNCTION__,fh->len);
 			send_unbuffered_frame(re,WSO_PONG,1,payload,(size_t)fh->len);
 			break;
 
 		case WSO_PONG:
-			YHS_INFO_MSG("%s: received PONG. Ignoring.\n",__FUNCTION__);
+			SERVER_DEBUG(re->server,"%s: received PONG. Ignoring.\n",__FUNCTION__);
 			// ignore pongs.
 			break;
 
 		case WSO_CLOSE:
 			{
-				YHS_INFO_MSG("%s: received CLOSE frame.\n",__FUNCTION__);
+				SERVER_DEBUG(re->server,"%s: received CLOSE frame.\n",__FUNCTION__);
 
 				if(re->ws.state==WSS_OPEN)
 				{
@@ -2930,7 +2995,7 @@ static int recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *
 							}
 							else
 							{
-								YHS_ERR("received bad UTF-8 byte 1");
+								SERVER_ERROR(re->server,"received bad UTF-8 byte 1");
 								goto bad;
 							}
 
@@ -2950,7 +3015,7 @@ static int recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *
 							}
 							else
 							{
-								YHS_ERR("received bad UTF-8 byte 2+");
+								SERVER_ERROR(re->server,"received bad UTF-8 byte 2+");
 								goto bad;
 							}
 							
@@ -2971,7 +3036,7 @@ static int recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *
 									assert(re->ws.recv.utf8_char<=0x7FF);
 									if(re->ws.recv.utf8_char<0x80)
 									{
-										YHS_ERR("received overlong 2-byte UTF-8 sequence");
+										SERVER_ERROR(re->server,"received overlong 2-byte UTF-8 sequence");
 										goto bad;
 									}
 								}
@@ -2980,12 +3045,12 @@ static int recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *
 									assert(re->ws.recv.utf8_char<=0xFFFF);
 									if(re->ws.recv.utf8_char<0x800)
 									{
-										YHS_ERR("received overlong 3-byte UTF-8 sequence");
+										SERVER_ERROR(re->server,"received overlong 3-byte UTF-8 sequence");
 										goto bad;
 									}
 									else if(re->ws.recv.utf8_char>=0xD800&&re->ws.recv.utf8_char<=0xDFFF)
 									{
-										YHS_ERR("received UTF-16 surrogate");
+										SERVER_ERROR(re->server,"received UTF-16 surrogate");
 										goto bad;
 									}
 								}
@@ -2993,12 +3058,12 @@ static int recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *
 								{
 									if(re->ws.recv.utf8_char<0x10000)
 									{
-										YHS_ERR("received overlong 4-byte UTF-8 sequence");
+										SERVER_ERROR(re->server,"received overlong 4-byte UTF-8 sequence");
 										goto bad;
 									}
 									else if(re->ws.recv.utf8_char>0x10FFFF)
 									{
-										YHS_ERR("received non-Unicode char");
+										SERVER_ERROR(re->server,"received non-Unicode char");
 										goto bad;
 									}
 								}
@@ -3029,7 +3094,7 @@ static int recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *
 						{
 							if(re->ws.recv.utf8_left!=0)
 							{
-								YHS_ERR("received truncated UTF-8 char");
+								SERVER_ERROR(re->server,"received truncated UTF-8 char");
 								goto bad;
 							}
 						}
@@ -3068,7 +3133,7 @@ static int recv_websocket_data(yhsRequest *re,void *buf,size_t buf_size,size_t *
 
 				if(re->ws.recv.fh.opcode!=WSO_CONTINUATION)
 				{
-					YHS_ERR("received data frame while processing fragmented frame");
+					SERVER_ERROR(re->server,"received data frame while processing fragmented frame");
 					goto bad;
 				}
 
@@ -3112,13 +3177,13 @@ static void do_websocket_closing_handshake(yhsRequest *re)
 {
 	assert(re->type==RT_WEBSOCKET);
 
-	YHS_INFO_MSG("%s: ws.state is %d.\n",__FUNCTION__,(int)re->ws.state);
+	SERVER_DEBUG(re->server,"%s: ws.state is %d.\n",__FUNCTION__,(int)re->ws.state);
 
 	if(re->ws.state==WSS_OPEN)
 	{
 		int got_data_frame;
 
-		YHS_INFO_MSG("%s: send unbuffered CLOSE frame.\n",__FUNCTION__);
+		SERVER_DEBUG(re->server,"%s: send unbuffered CLOSE frame.\n",__FUNCTION__);
 
 		send_unbuffered_frame(re,WSO_CLOSE,1,0,0);
 
@@ -3127,7 +3192,7 @@ static void do_websocket_closing_handshake(yhsRequest *re)
 		// just poll repeatedly, dropping data frames, until the connection dies
         // or do_control_frame returns without a data frame ready, indicating a
         // close was received.
-		YHS_INFO_MSG("%s: wait for CLOSE frame.\n",__FUNCTION__);
+		SERVER_DEBUG(re->server,"%s: wait for CLOSE frame.\n",__FUNCTION__);
 		do_control_frames(re,&re->ws.recv.fh,&got_data_frame,DCFM_WAIT_FOR_CLOSE);
 	}
 
@@ -3317,7 +3382,7 @@ int yhs_get_content(yhsRequest *re,int num,char *buf)
         
         if(!select_socket(re->sock,0,&is_readable,0))
         {
-            YHS_SOCKET_ERR("check socket readability.");
+            SERVER_SOCKET_ERROR(re->server,"check socket readability.");
             return 0;
         }
         
@@ -3328,7 +3393,7 @@ int yhs_get_content(yhsRequest *re,int num,char *buf)
         
         if(r==-1)
         {
-            YHS_SOCKET_ERR("recv.");
+            SERVER_SOCKET_ERROR(re->server,"recv.");
             return 0;
         }
         else if(r==0)

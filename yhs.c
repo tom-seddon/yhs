@@ -1028,7 +1028,7 @@ static int accept_request(yhsServer *server,SOCKET *accepted_sock)
 		}
 	}
 	
-	inet_ntop(AF_INET,&client_addr,client_addr_str,sizeof client_addr_str);
+	inet_ntop(AF_INET,&client_addr.sin_addr,client_addr_str,sizeof client_addr_str);
 	SERVER_DEBUG(server,"%s: connection from %s port %d\n",__FUNCTION__,client_addr_str,ntohs(client_addr.sin_port));
     
     return 1;

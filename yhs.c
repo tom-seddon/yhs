@@ -1637,6 +1637,22 @@ static void close_connection_cleanly(yhsRequest *re)
 			break;
 	}
 
+	if(shutdown(re->sock,SD_SEND)<0)
+		SERVER_SOCKET_ERROR(re->server,"shutdown with SD_SEND during clean close - this error will be ignored");
+
+	for(;;)
+	{
+		char tmp;
+		int n=recv(re->sock,&tmp,1,0);
+		if(n<1)
+		{
+			// don't bother mentioning the error - it's probably just the
+			// connection reset message from the client forcibly closing the
+			// connection.
+			break;
+		}
+	}
+
 	close_connection_forcibly(re,0);
 }
 

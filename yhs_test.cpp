@@ -370,7 +370,19 @@ static void Log(yhsLogCategory cat,const char *str,void *context)
 {
 	(void)context;
 
-	fputs(str,cat==YHS_LOG_ERROR?stderr:stdout);
+	switch(cat)
+	{
+	case YHS_LOG_ERROR:
+		fputs(str,stderr);
+		break;
+
+	case YHS_LOG_INFO:
+		fputs(str,stdout);
+		break;
+
+	case YHS_LOG_DEBUG:
+		break;
+	}
 
 #ifdef _WIN32
 	OutputDebugStringA(str);
@@ -432,6 +444,7 @@ int main(int argc,char *argv[])
 
 	yhs_set_server_log_callback(server,&Log,0);
 	yhs_set_server_log_enabled(server,YHS_LOG_INFO,1);
+	yhs_set_server_log_enabled(server,YHS_LOG_DEBUG,1);
     
     yhs_add_to_toc(yhs_add_res_path_handler(server,"/folder/",&HandleFolder,0));
 	yhs_add_to_toc(yhs_add_res_path_handler(server,"/file",&HandleFile,0));

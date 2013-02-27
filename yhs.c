@@ -866,6 +866,8 @@ static void print_likely_urls(yhsServer *server)
 static void default_log_callback(yhsLogCategory category,const char *message,void *context)
 {
 	FILE *f;
+
+	(void)context;
 	
 	if(category==YHS_LOG_ERROR)
 		f=stderr;

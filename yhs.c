@@ -192,6 +192,10 @@ enum
 	
 	// Max length of a path for the file serving component
 	MAX_PATH_SIZE=1000,
+
+	// Timeout, in seconds, to use when selecting sockets that are
+	// expected to definitely have incoming data.
+	EXPECTED_DATA_TIMEOUT=10,
 };
 
 // Memory allocation wrappers.
@@ -1052,7 +1056,7 @@ static int read_request_header(yhsServer *server,SOCKET sock,char *buf,size_t bu
     {
         int is_data_waiting,n;
         
-        if(!select_socket(sock,10,&is_data_waiting,0))
+        if(!select_socket(sock,EXPECTED_DATA_TIMEOUT,&is_data_waiting,0))
         {
             SERVER_SOCKET_ERROR(server,"Check accepted socket readability.");
             break;
@@ -3387,7 +3391,7 @@ int yhs_get_content(yhsRequest *re,int num,char *buf)
     {
         int r,is_readable;
         
-        if(!select_socket(re->sock,0,&is_readable,0))
+        if(!select_socket(re->sock,EXPECTED_DATA_TIMEOUT,&is_readable,0))
         {
             SERVER_SOCKET_ERROR(re->server,"check socket readability.");
             return 0;

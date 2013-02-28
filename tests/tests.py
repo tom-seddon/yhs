@@ -1,12 +1,27 @@
 #!/usr/bin/python
-import httplib,sys,random,hashlib
+import httplib,sys,random,hashlib,argparse
+
+g_verbose=False
+g_very_verbose=False
 
 ##########################################################################
 ##########################################################################
 
-host="localhost"
-port=35000
-strict=True
+def v(str):
+    global g_verbose
+    global g_very_verbose
+    
+    if g_verbose or g_very_verbose:
+        sys.stderr.write(str)
+
+##########################################################################
+##########################################################################
+        
+def vv(str):
+    global g_very_verbose
+    
+    if g_very_verbose:
+        sys.stderr.write(str)
 
 ##########################################################################
 ##########################################################################
@@ -127,7 +142,7 @@ class HashContent(Test):
 ##########################################################################
 ##########################################################################
         
-def main():
+def main(args):
     tests=[
         OversizedRequest,
         EchoSingleHeaderField,
@@ -138,10 +153,18 @@ def main():
 
     statuses=[]
 
+    host,port=(args.host.split(":")+[None])[:2]
+    if port is None:
+        port="80"
+
+    port=int(port)
+
+    strict=True
+
     for test in tests:
         print "%s"%test.DESC
 
-        sys.stdout.write("    Construct")
+        v("    Construct")
         obj=test()
 
         obj.conn=httplib.HTTPConnection(host,
@@ -149,21 +172,21 @@ def main():
                                         strict)
 
         try:
-            sys.stdout.write(" Connect")
+            v(" Connect")
             obj.conn.connect()
 
-            sys.stdout.write(" Setup")
+            v(" Setup")
             obj.setup()
 
             #obj.conn.send()
 
-            sys.stdout.write(" GetResponse")
+            v(" GetResponse")
             obj.resp=obj.conn.getresponse()
 
-            sys.stdout.write(" Check")
+            v(" Check")
             obj.check()
 
-            sys.stdout.write("\n")
+            v("\n")
             
         except TestFail,e:
             print "    Failed."
@@ -179,5 +202,26 @@ def main():
 ##########################################################################
 
 if __name__=="__main__":
-    main()
+    parser=argparse.ArgumentParser(description="HTTP server test")
+
+    parser.add_argument("-v",
+                        "--verbose",
+                        action="store_true",
+                        default=False,
+                        help="If specified, verbosity.")
+
+    parser.add_argument("-V",
+                        "--very-verbose",
+                        action="store_true",
+                        default=False,
+                        help="If specified, extra verbosity. (Implies -v.)")
+
+    parser.add_argument("host",
+                        metavar="HOST",
+                        nargs="?",
+                        default="127.0.0.1:35000",
+                        help=
+                        """Host/port to connect to. (Default: %(default)s.)""")
+
+    main(parser.parse_args())
     

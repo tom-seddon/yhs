@@ -4381,7 +4381,7 @@ void yhs_file_server_handler(yhsRequest *re)
 					if(de->d_name[0]=='.')
 						continue;
 					
-					if(!join_paths(de_local_path,root,de->d_name))
+					if(!join_paths(de_local_path,local_path,de->d_name))
 						continue;
 					
 					if(stat(de_local_path,&st)!=0)

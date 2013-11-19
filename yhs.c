@@ -1390,11 +1390,8 @@ static const yhsHandler *find_handler_for_res_path(yhsServer *server,const char 
 			{
 				if(strncmp(h->res_path,res_path,h->res_path_len)==0)
 				{
-					if(res_path_len==h->res_path_len||
-						(h->res_path[h->res_path_len-1]=='/'&&!strchr(res_path+h->res_path_len,'/')))
-					{
+					if(res_path_len==h->res_path_len||h->res_path[h->res_path_len-1]=='/')
 						return h;
-					}
 				}
 			}
 		}

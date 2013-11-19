@@ -1377,9 +1377,9 @@ static int process_request_header(char *request,size_t *method_pos,size_t *res_p
 
 // Finds most appropriate res path handler for the given res path, which may
 // refer to a file or a folder.
-static yhsHandler *find_handler_for_res_path(yhsServer *server,const char *res_path,yhsMethod method)
+static const yhsHandler *find_handler_for_res_path(yhsServer *server,const char *res_path,yhsMethod method)
 {
-    yhsHandler *h;
+    const yhsHandler *h;
     size_t res_path_len=strlen(res_path);
     
     for(h=server->handlers.prev;h->handler_fn;h=h->prev)

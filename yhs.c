@@ -1732,20 +1732,20 @@ static void handle_toc(yhsRequest *re)
 	yhs_begin_data_response(re,"text/html");
 	
 	yhs_textf(re,"<html>\n");
-	yhs_html_textf(re,YHS_HEF_OFF," <head><title>\x1by%s\x1bn - Contents</title></head>\n",re->server->name);
+	yhs_html_textf(re," <head><title>\a+%s\a- - Contents</title></head>\n",re->server->name);
 	yhs_textf(re," <body>\n");
-	yhs_html_textf(re,YHS_HEF_OFF," <h1>\x1by%s\x1bn - Contents</h1>\n",re->server->name);
+	yhs_html_textf(re," <h1>\a+%s\a- - Contents</h1>\n",re->server->name);
 	
 	for(h=re->server->handlers.next;h->handler_fn;h=h->next)
 	{
 		if(h->flags&HF_TOC)
 		{
-			yhs_html_textf(re,YHS_HEF_OFF," <p><a href=\"\x1by%s\x1bn\">",h->res_path);
+			yhs_html_textf(re," <p><a href=\"\a+%s\a-\">",h->res_path);
 			
 			if(h->description)
-				yhs_html_textf(re,0,"%s (",h->description);
+				yhs_html_textf(re,"\a+%s (",h->description);
 
-			yhs_html_textf(re,YHS_HEF_OFF,"<tt>\x1by%s\x1bn</tt>",h->res_path);
+			yhs_html_textf(re,"<tt>\a+%s\a-</tt>",h->res_path);
 
 			if(h->description)
 				yhs_textf(re,")");
@@ -2182,53 +2182,55 @@ void yhs_text(yhsRequest *re,const char *text)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-void yhs_html_textf(yhsRequest *re,unsigned escape_flags,const char *fmt,...)
+void yhs_html_textf(yhsRequest *re,const char *fmt,...)
 {
     va_list v;
     va_start(v,fmt);
-    yhs_html_textv(re,escape_flags,fmt,v);
+    yhs_html_textv(re,fmt,v);
     va_end(v);
 }
 
-void yhs_html_textv(yhsRequest *re,unsigned escape_flags,const char *fmt,va_list v)
+void yhs_html_textv(yhsRequest *re,const char *fmt,va_list v)
 {
     char text[MAX_TEXT_LEN];
     
     vsnprintf(text,sizeof text,fmt,v);
 	text[sizeof text-1]=0;
     
-    yhs_html_text(re,escape_flags,text);
+    yhs_html_text(re,text);
 }
 
-void yhs_html_text(yhsRequest *re,unsigned escape_flags,const char *text)
+void yhs_html_text(yhsRequest *re,const char *text)
 {
 	int escape=1;//@TODO make this configurable with a flag again??
-	int br=!!(escape_flags&YHS_HEF_BR);
-	int on=!(escape_flags&YHS_HEF_OFF);
-	int esc=0;
+	int br=0;
+	int on=0;
+	int *esc_flag=NULL;
 	const char *c;
 
 	assert(re->type==RT_TEXT);
 	
 	for(c=text;*c!=0;++c)
 	{
-		if(esc)
+		if(esc_flag)
 		{
-			if(*c=='y')
-				on=1;
-			else if(*c=='n')
-				on=0;
+			if(*c=='+')
+				*esc_flag=1;
+			else if(*c=='-')
+				*esc_flag=0;
 			else
 			{
 				// umm...
 			}
 			
-			esc=0;
+			esc_flag=NULL;
 		}
 		else
 		{
-			if(*c=='\x1b')
-				esc=1;
+			if(*c=='\a')
+				esc_flag=&on;
+			else if(*c=='\b')
+				esc_flag=&br;
 			else if(*c=='<'&&escape&&on)
 				yhs_text(re,"&lt;");
 			else if(*c=='>'&&escape&&on)
@@ -2451,6 +2453,14 @@ void yhs_pixel(yhsRequest *re,int r,int g,int b,int a)
 
 void yhs_error_response(yhsRequest *re,const char *status_line)
 {
+	yhs_verbose_error_response(re,status_line,NULL);
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+void yhs_verbose_error_response(yhsRequest *re,const char *status_line,const char *elaboration)
+{
 	SERVER_INFO(re->server,"%s: %s\n",__FUNCTION__,status_line);
 	
 	header(re,RT_TEXT,status_line);
@@ -2458,14 +2468,17 @@ void yhs_error_response(yhsRequest *re,const char *status_line)
     
     yhs_textf(re,"<html>\n");
     yhs_textf(re," <head>\n");
-    yhs_textf(re,"  <title>%s - %s</title>\n",re->server->name,status_line);
+    yhs_html_textf(re,"  <title>\a+%s - %s\a-</title>\n",re->server->name,status_line);
     yhs_textf(re," </head>\n");
     yhs_textf(re," <body>\n");
-    yhs_textf(re,"  <h1>%s - %s</h1>",re->server->name,status_line);
+    yhs_html_textf(re,"  <h1>\a+%s - %s\a-</h1>",re->server->name,status_line);
     yhs_textf(re,"  <hr>\n");
+
+	if(elaboration)
+		yhs_html_textf(re,"  <p>\a+%s\a-</p>",elaboration);
 	
 	yhs_textf(re,"  <p>HTTP Method: <tt>%s</tt></p>",yhs_get_method_str(re));
-	yhs_textf(re,"  <p>Resource Path: <tt>%s</tt></p>",yhs_get_path(re));
+	yhs_html_textf(re,"  <p>Resource Path: <tt>\a+%s\a-</tt></p>",yhs_get_path(re));
 	
     yhs_textf(re,"  <hr>\n");
     yhs_textf(re,"  <i>yocto HTTP server - compiled at %s on %s</i>\n",__TIME__,__DATE__);
@@ -4354,9 +4367,9 @@ void yhs_file_server_handler(yhsRequest *re)
 			
 			yhs_begin_data_response(re,"text/html");
 			
-			yhs_html_textf(re,YHS_HEF_OFF,"<html><head><title>Contents of \x1by%s\x1bn</title></head><body>",strlen(rel_path)==0?"/":rel_path);
+			yhs_html_textf(re,"<html><head><title>Contents of \a+%s\a-</title></head><body>",strlen(rel_path)==0?"/":rel_path);
 			
-			yhs_html_textf(re,YHS_HEF_OFF,"<pre>");
+			yhs_html_textf(re,"<pre>");
 			
 			if(d)
 			{
@@ -4392,7 +4405,7 @@ void yhs_file_server_handler(yhsRequest *re)
 						++num_files;
 					}
 					
-					yhs_html_textf(re,YHS_HEF_OFF,"%-10s<a href=\"%s\">\x1by%s\x1bn</a>\n",size,de->d_name,de->d_name);
+					yhs_html_textf(re,"%-10s<a href=\"%s%s\">\a+%s\a-</a>\n",size,de->d_name,st.st_mode&S_IFDIR?"/":"",de->d_name);
 				}
 
 				closedir(d);
@@ -4401,7 +4414,7 @@ void yhs_file_server_handler(yhsRequest *re)
 			
 			get_size_string(size_str,total_size);
 			
-			yhs_html_textf(re,YHS_HEF_OFF,"</pre>%s in %u file(s) and %u folder(s)</body></html>",size_str,num_files,num_folders);
+			yhs_html_textf(re,"</pre>%s in %u file(s) and %u folder(s)</body></html>",size_str,num_files,num_folders);
 		}
 		else
 		{

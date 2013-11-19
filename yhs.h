@@ -282,19 +282,16 @@ YHS_EXTERN void yhs_text(yhsRequest *req,const char *text);
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-// Send response text, with HTML special characters escaped, and
-// optionally \n replaced with <BR>.
+// Send response text, optionally with HTML special characters escaped, and
+// optionally with \n replaced with <BR>.
 //
-// Print "\x1bn" to temporarily switch munging off, and "\x1by"
-// to switch it back on, to conveniently print bits of HTML
-// markup in with the text. Include the YHS_OFF flag to start
-// out with munging disabled rather than enabled.
+// Print "\a+" to switch escaping on, and "\a-" to switch it off.
+//
+// Print "\b+" to switch <BR> translation on, and "\b-" to switch it off.
 //
 // IN
 //
 // response - the response object
-//
-// escape_flags - combination of yhsHTMLEscapeFlags values
 //
 // fmt,... - the usual format string thing
 // fmt,v - the usual format string thing
@@ -302,25 +299,16 @@ YHS_EXTERN void yhs_text(yhsRequest *req,const char *text);
 //
 // NOTES
 //
-// - Space for the format string expansion is limited; see
-//   the MAX_TEXT_LEN constant.
+// - Space for the format string expansion is limited; see the MAX_TEXT_LEN
+//   constant.
 //
 // - I'm not sure "html" is the best term for it.
 //
 // - Response data is automatically discarded when processing a HEAD request.
-
-enum yhsHTMLEscapeFlags
-{
-	// If set, translate '\n' into <BR>
-	YHS_HEF_BR=1,
-	
-	// If set, munging starts out off rather than on.
-	YHS_HEF_OFF=2,
-};
-
-YHS_EXTERN void yhs_html_textf(yhsRequest *req,unsigned escape_flags,const char *fmt,...) YHS_PRINTF_LIKE(3,4);
-YHS_EXTERN void yhs_html_textv(yhsRequest *req,unsigned escape_flags,const char *fmt,va_list v);
-YHS_EXTERN void yhs_html_text(yhsRequest *req,unsigned escape_flags,const char *text);
+//
+YHS_EXTERN void yhs_html_textf(yhsRequest *req,const char *fmt,...) YHS_PRINTF_LIKE(3,4);
+YHS_EXTERN void yhs_html_textv(yhsRequest *req,const char *fmt,va_list v);
+YHS_EXTERN void yhs_html_text(yhsRequest *req,const char *text);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -395,7 +383,11 @@ YHS_EXTERN void yhs_pixel(yhsRequest *respones,int r,int g,int b,int a);
 // status_line - the status line, as per the HTTP spec, without the leading
 //               "HTTP/1.1 ". e.g., "200 OK".
 //
+// elaboration - a more detailed explanation for the error, included in the HTML
+//               error page.
+//
 YHS_EXTERN void yhs_error_response(yhsRequest *req,const char *status_line);
+YHS_EXTERN void yhs_verbose_error_response(yhsRequest *req,const char *status_line,const char *elaboration);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

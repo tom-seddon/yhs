@@ -219,7 +219,7 @@ call =yhs_defer_response= to do this.
 
 Requests with deferred responses are held in a list, so you can work
 through them later. You can maintain one list of all such requests, or
-have multiple lists.
+have multiple lists. A request can only be a member of a single list.
 
 Each list is represented by a =yhsRequest *=, holding a pointer to the
 head. It should start out NULL.
@@ -245,13 +245,13 @@ up and remove it from the list.
 
 The expected code is along these lines:
 
-: yhsRequest **cur=&list;
-: while(*cur) {
+: yhsRequest *cur=list;
+: while(cur) {
 :     /* do stuff to **cur */
 :     if(/* finished with **cur */)
-:         yhs_end_deferred_response(cur);
+:         cur = yhs_end_deferred_response(cur);
 :     else
-:         yhs_next_request_ptr(cur);
+:         cur = yhs_next_request_ptr(cur, &list);
 : }
 
 ** Content

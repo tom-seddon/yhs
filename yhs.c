@@ -569,7 +569,7 @@ typedef struct WebSocketData WebSocketData;
 struct yhsRequest
 {
 	yhsRequest *next_deferred,*prev_deferred;
-	yhsRequest *next_deferred_in_chain;
+	yhsRequest *next_deferred_in_chain,*prev_deferred_in_chain;
 
 	unsigned flags;
     yhsServer *server;
@@ -3324,7 +3324,10 @@ int yhs_defer_response(yhsRequest *re,yhsRequest **chain)
  	dre->server->first_deferred=dre;
 
 	//
+	dre->prev_deferred_in_chain=NULL;
 	dre->next_deferred_in_chain=*chain;
+	if(dre->next_deferred_in_chain)
+		dre->next_deferred_in_chain->prev_deferred_in_chain=dre;
 	*chain=dre;
 
 	// mark original request as deferred, so it can be discarded.
@@ -3337,24 +3340,33 @@ int yhs_defer_response(yhsRequest *re,yhsRequest **chain)
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-void yhs_next_request_ptr(yhsRequest **re_ptr)
+yhsRequest *yhs_next_request_ptr(yhsRequest *re)
 {
-	if(*re_ptr)
-		re_ptr=&(*re_ptr)->next_deferred_in_chain;
+	if(re)
+		return re->next_deferred_in_chain;
+	else
+		return nullptr;
 }
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-void yhs_end_deferred_response(yhsRequest **re_ptr)
+yhsRequest *yhs_end_deferred_response(yhsRequest *re, yhsRequest **chain)
 {
-	yhsRequest *re=*re_ptr;
-
-	*re_ptr=re->next_deferred_in_chain;
-
+	yhsRequest *next_re=re->next_deferred_in_chain;
 	close_connection_cleanly(re);
 
 	assert(re->flags&RF_DEFERRED);
+
+	// Splice our prev & next chain elements to point to each other
+	if(re->prev_deferred_in_chain)
+		re->prev_deferred_in_chain->next_deferred_in_chain = next_re;
+	if(next_re)
+		next_re->prev_deferred_in_chain = re->prev_deferred_in_chain;
+
+	// If this is the head of the list, point the head to the next element
+	if(*chain==re)
+		*chain=next_re;
 
 	if(re->prev_deferred)
 		re->prev_deferred->next_deferred=re->next_deferred;
@@ -3368,6 +3380,8 @@ void yhs_end_deferred_response(yhsRequest **re_ptr)
 		re->next_deferred->prev_deferred=re->prev_deferred;
 
 	FREE(re);
+
+	return next_re;
 }
 
 // void yhs_end_deferred_response(yhsRequest *re)

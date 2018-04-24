@@ -505,15 +505,15 @@ YHS_EXTERN yhsBool yhs_defer_response(yhsRequest *re,yhsRequest **chain);
 
 // Method of iteration:
 //
-// yhsRequest **ptr=&whatever;//whatever was passed in to yhs_defer_response
-// while(*ptr) {
+// yhsRequest *ptr=chain; // chain is whatever was passed in to yhs_defer_response
+// while(ptr) {
 //     if(done)
-//         yhs_end_deferred_response(ptr);
+//         ptr = yhs_end_deferred_response(ptr, &chain);
 //     else
-//         yhs_next_request_ptr(ptr);
+//         ptr = yhs_next_request_ptr(ptr);
 
-YHS_EXTERN void yhs_next_request_ptr(yhsRequest **re_ptr);
-YHS_EXTERN void yhs_end_deferred_response(yhsRequest **re_ptr);
+YHS_EXTERN yhsRequest *yhs_next_request_ptr(yhsRequest *re);
+YHS_EXTERN yhsRequest *yhs_end_deferred_response(yhsRequest *re, yhsRequest **chain);
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

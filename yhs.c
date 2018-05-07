@@ -1634,8 +1634,13 @@ static void close_connection_cleanly(yhsRequest *re)
 			break;
 	}
 
+#ifdef __APPLE__
+	if(shutdown(re->sock,SHUT_WR)<0)
+		SERVER_SOCKET_ERROR(re->server,"shutdown with SHUT_WR during clean close - this error will be ignored");
+#else
 	if(shutdown(re->sock,SD_SEND)<0)
 		SERVER_SOCKET_ERROR(re->server,"shutdown with SD_SEND during clean close - this error will be ignored");
+#endif
 
 	for(;;)
 	{

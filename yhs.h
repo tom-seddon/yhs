@@ -306,7 +306,7 @@ YHS_EXTERN void yhs_text(yhsRequest *req,const char *text);
 //
 // - Response data is automatically discarded when processing a HEAD request.
 //
-YHS_EXTERN void yhs_html_textf(yhsRequest *req,const char *fmt,...) YHS_PRINTF_LIKE(3,4);
+YHS_EXTERN void yhs_html_textf(yhsRequest *req,const char *fmt,...) YHS_PRINTF_LIKE(2,3);
 YHS_EXTERN void yhs_html_textv(yhsRequest *req,const char *fmt,va_list v);
 YHS_EXTERN void yhs_html_text(yhsRequest *req,const char *text);
 
